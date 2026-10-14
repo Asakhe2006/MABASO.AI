@@ -127,9 +127,15 @@ def register_library_routes(
             where.append("category = 'audio'")
         elif normalized_section == "transcripts":
             where.append("(lower(source_type) LIKE '%transcript%' OR lower(original_name) LIKE '%transcript%')")
-        if compact_text(before):
-            where.append("created_at < ?")
-            params.append(compact_text(before))
+        cursor = compact_text(before)
+        if cursor:
+            cursor_created_at, separator, cursor_id = cursor.partition("|")
+            if separator and cursor_created_at and cursor_id:
+                where.append("(created_at < ? OR (created_at = ? AND id < ?))")
+                params.extend([cursor_created_at, cursor_created_at, cursor_id])
+            else:
+                where.append("created_at < ?")
+                params.append(cursor)
         params.append(limit + 1)
         with get_db_connection() as connection:
             file_rows = connection.execute(
@@ -169,7 +175,7 @@ def register_library_routes(
             "files": [serialize_library_file(row) for row in page],
             "folders": [serialize_folder(row) for row in folder_rows],
             "links": [serialize_link(row) for row in link_rows],
-            "next_before": compact_text(page[-1]["created_at"]) if has_more and page else "",
+            "next_before": f"{compact_text(page[-1]['created_at'])}|{compact_text(page[-1]['id'])}" if has_more and page else "",
             "has_more": has_more,
             "storage": await asyncio.to_thread(get_library_storage_summary, normalized_email),
             "preferences": {"auto_save_links": bool(int(preference["library_auto_save_links"] or 0)) if preference else False},

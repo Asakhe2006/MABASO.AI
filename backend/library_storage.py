@@ -15,7 +15,23 @@ import requests
 
 
 class LibraryStorageError(RuntimeError):
-    pass
+    """Safe storage-provider failure metadata for backend error handling."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, provider_message: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.provider_message = provider_message[:240]
+
+
+def _safe_provider_message(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get("message") or payload.get("error") or payload.get("statusCode") or ""
+    return " ".join(str(value).split())[:240]
 
 
 @dataclass(frozen=True)
@@ -73,7 +89,11 @@ class SupabaseLibraryStorage:
             timeout=self.config.timeout_seconds,
         )
         if response.status_code not in {200, 201}:
-            raise LibraryStorageError(f"Private object upload failed with status {response.status_code}.")
+            raise LibraryStorageError(
+                f"Private object upload failed with status {response.status_code}.",
+                status_code=response.status_code,
+                provider_message=_safe_provider_message(response),
+            )
 
     def get(self, object_key: str) -> bytes:
         if not self.configured:
@@ -84,7 +104,11 @@ class SupabaseLibraryStorage:
             timeout=self.config.timeout_seconds,
         )
         if response.status_code != 200:
-            raise LibraryStorageError(f"Private object download failed with status {response.status_code}.")
+            raise LibraryStorageError(
+                f"Private object download failed with status {response.status_code}.",
+                status_code=response.status_code,
+                provider_message=_safe_provider_message(response),
+            )
         return response.content
 
     def delete(self, object_keys: list[str]) -> None:
@@ -101,4 +125,8 @@ class SupabaseLibraryStorage:
             timeout=self.config.timeout_seconds,
         )
         if response.status_code not in {200, 204}:
-            raise LibraryStorageError(f"Private object deletion failed with status {response.status_code}.")
+            raise LibraryStorageError(
+                f"Private object deletion failed with status {response.status_code}.",
+                status_code=response.status_code,
+                provider_message=_safe_provider_message(response),
+            )

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -71,6 +71,28 @@ class PersonalLibraryTests(unittest.TestCase):
         storage_get.assert_not_called()
         self.assertIn("Trusted cached notes", resolved.lecture_notes)
         self.assertEqual(resolved.reference_attachments, [])
+
+    def test_failed_storage_upload_does_not_delete_an_object_that_was_never_created(self):
+        storage = MagicMock()
+        storage.configured = True
+        storage.put.side_effect = main.LibraryStorageError("upload rejected", status_code=404)
+        with (
+            patch.object(main, "library_object_storage", storage),
+            patch.object(main, "release_library_storage_reservation") as release,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                main.commit_library_file(
+                    email="student@example.test",
+                    reservation_id="reservation-1",
+                    filename="notes.pdf",
+                    content_type="application/pdf",
+                    content=b"pdf bytes",
+                    checksum="checksum",
+                )
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["code"], "LIBRARY_STORAGE_UNAVAILABLE")
+        storage.delete.assert_not_called()
+        release.assert_called_once_with("student@example.test", "reservation-1")
 
     def test_profile_personalization_is_opt_in_and_user_scoped(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -142,6 +164,44 @@ class PersonalLibraryTests(unittest.TestCase):
             self.assertIn("Signals project", context)
             self.assertNotIn("other-user", context)
             self.assertNotIn("poetry", context)
+
+
+class PodcastLibraryPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_podcast_is_saved_once_as_a_library_recording(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            podcast_path = Path(temp_dir) / "full-podcast.mp3"
+            podcast_path.write_bytes(b"generated podcast audio")
+            package = {
+                "podcast_title": "Signals revision",
+                "podcast_script": "A cached podcast transcript.",
+                "_podcast_download_file": str(podcast_path),
+            }
+            storage = MagicMock()
+            storage.configured = True
+            main.jobs["podcast-library-test"] = {
+                "owner_email": "student@example.test",
+                "created_at": "2026-10-14T00:00:00+00:00",
+            }
+            with (
+                patch.object(main, "generate_podcast_package", new=AsyncMock(return_value=package)),
+                patch.object(main, "library_object_storage", storage),
+                patch.object(main, "reserve_library_storage", return_value={"existing": None, "reservation_id": "reservation-1"}),
+                patch.object(main, "commit_library_file", return_value={"id": "library-podcast", "category": "audio"}) as commit,
+                patch.object(main, "update_job") as update_job,
+                patch.object(main, "record_audit_log"),
+            ):
+                await main.run_podcast_job(
+                    "podcast-library-test", "Summary", "Transcript", "Notes", "Slides", "Questions",
+                    2, None, 8, "English",
+                )
+            commit.assert_called_once()
+            self.assertEqual(commit.call_args.kwargs["source_type"], "generated_podcast")
+            self.assertEqual(commit.call_args.kwargs["content_type"], "audio/mpeg")
+            completed = [call for call in update_job.call_args_list if call.kwargs.get("status") == "completed"]
+            self.assertEqual(len(completed), 1)
+            self.assertEqual(completed[0].kwargs["library_file"]["id"], "library-podcast")
+            self.assertEqual(completed[0].kwargs["library_save_status"], "saved")
+            main.jobs.pop("podcast-library-test", None)
 
 
 if __name__ == "__main__":

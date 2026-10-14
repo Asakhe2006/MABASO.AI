@@ -23109,9 +23109,9 @@ export default function App() {
       return;
     }
     setSelectedRoomBoardImageId((current) => (
-      activeRoomBoardImages.some((image) => image.id === current)
+      current && activeRoomBoardImages.some((image) => image.id === current)
         ? current
-        : activeRoomBoardImages[activeRoomBoardImages.length - 1]?.id || activeRoomBoardImages[0]?.id || ""
+        : ""
     ));
   }, [activeRoomBoardImages]);
 
@@ -31832,7 +31832,7 @@ export default function App() {
               {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <button type="button" onClick={() => { setIsProfileMenuOpen(false); openCollaborationPage({ refresh: false }); setProfileEditorAnchor({ top: 70, left: Math.max(12, window.innerWidth - 430) }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
+          <button type="button" onClick={() => { setIsProfileMenuOpen(false); setProfileEditorAnchor({ top: 70, left: Math.max(12, window.innerWidth - 430) }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
             <UsersRound className="h-4 w-4" aria-hidden="true" />
             <span>{collaborationProfile ? "Edit Profile" : "Create Profile"}</span>
           </button>
@@ -32723,7 +32723,7 @@ export default function App() {
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "timetable" ? <BodyPortal active={isTimetableFocusMode}>{renderStudyTimetablePage()}</BodyPortal> : null}
-        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} initialSection={libraryLaunch.section} initialItemId={libraryLaunch.itemId} onAttach={(attachment) => attachLibraryReferenceToChat(attachment, { returnToChat: true })} /></Suspense> : null}
+        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} initialSection={libraryLaunch.section} initialItemId={libraryLaunch.itemId} onBack={() => openProtectedAppPage("capture")} onAttach={(attachment) => attachLibraryReferenceToChat(attachment, { returnToChat: true })} /></Suspense> : null}
         {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}

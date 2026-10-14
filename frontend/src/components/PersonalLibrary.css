@@ -64,6 +64,18 @@
 .personal-library-success button,
 .personal-library-success svg { width: 16px; height: 16px; }
 
+.personal-library-progress {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #a7f3d0;
+  font-size: 11px;
+}
+
+.personal-library-progress svg { width: 16px; height: 16px; }
+
 .library-link-setting {
   display: flex;
   align-items: flex-start;

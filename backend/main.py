@@ -38514,6 +38514,52 @@ async def run_podcast_job(
             job_id,
             output_language,
         )
+        library_file = None
+        library_save_status = "storage_not_configured"
+        job = jobs.get(job_id, {})
+        owner_email = normalize_email(job.get("owner_email", ""))
+        podcast_path = Path(compact_text(podcast_package.get("_podcast_download_file")))
+        if library_object_storage.configured and owner_email and podcast_path.is_file():
+            try:
+                podcast_bytes = await asyncio.to_thread(podcast_path.read_bytes)
+                if len(podcast_bytes) <= MAX_LIBRARY_FILE_BYTES:
+                    checksum = hashlib.sha256(podcast_bytes).hexdigest()
+                    reservation = await asyncio.to_thread(
+                        reserve_library_storage, owner_email, len(podcast_bytes), checksum,
+                    )
+                    if reservation.get("existing"):
+                        library_file = reservation["existing"]
+                        library_save_status = "already_saved"
+                    else:
+                        podcast_title = compact_text(podcast_package.get("podcast_title"), "Study podcast")
+                        library_file = await asyncio.to_thread(
+                            commit_library_file,
+                            email=owner_email,
+                            reservation_id=reservation["reservation_id"],
+                            filename=f"{sanitize_download_filename(podcast_title)}.mp3",
+                            content_type="audio/mpeg",
+                            content=podcast_bytes,
+                            checksum=checksum,
+                            source_type="generated_podcast",
+                            extracted_text=compact_text(podcast_package.get("podcast_script")),
+                        )
+                        library_save_status = "saved"
+                        record_audit_log(
+                            action="library.file.auto_saved",
+                            email=owner_email,
+                            resource_type="library_file",
+                            resource_name=library_file["id"],
+                            metadata={"source_kind": "generated_podcast", "size_bytes": len(podcast_bytes)},
+                        )
+                else:
+                    library_save_status = "file_too_large"
+            except HTTPException as library_error:
+                library_save_status = "storage_full" if library_error.status_code == 409 else "storage_unavailable"
+            except Exception:
+                library_save_status = "storage_unavailable"
+                logger.warning("Generated podcast could not be saved to Library", exc_info=True)
+        podcast_package["library_file"] = library_file
+        podcast_package["library_save_status"] = library_save_status
         update_job(
             job_id,
             status="completed",
@@ -40134,8 +40180,10 @@ def commit_library_file(
     owner_key = hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()[:24]
     object_key = f"{owner_key}/{file_id}{extension}"
     awaitable_error = None
+    object_uploaded = False
     try:
         library_object_storage.put(object_key, content, content_type)
+        object_uploaded = True
         now_iso = utc_now().isoformat()
         with get_db_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -40166,13 +40214,23 @@ def commit_library_file(
         return serialize_library_file(row)
     except Exception as exc:
         awaitable_error = exc
-        try:
-            library_object_storage.delete([object_key])
-        except Exception:
-            logger.warning("Could not clean orphaned Library object %s", object_key)
+        if object_uploaded:
+            try:
+                library_object_storage.delete([object_key])
+            except Exception:
+                logger.warning("Could not clean orphaned Library object %s", object_key)
         release_library_storage_reservation(normalized_email, reservation_id)
     if isinstance(awaitable_error, HTTPException):
         raise awaitable_error
+    if isinstance(awaitable_error, LibraryStorageError):
+        provider_status = getattr(awaitable_error, "status_code", None)
+        if provider_status == 404:
+            message = "The private Library storage bucket was not found. An administrator must configure the approved Supabase bucket."
+        elif provider_status in {401, 403}:
+            message = "Private Library storage is not authorised. An administrator must verify the Supabase service configuration."
+        else:
+            message = "Private Library storage could not accept the file. Please try again shortly."
+        raise HTTPException(status_code=503, detail={"code": "LIBRARY_STORAGE_UNAVAILABLE", "message": message}) from awaitable_error
     raise HTTPException(status_code=502, detail="The file could not be saved to the private Library.") from awaitable_error
 
 

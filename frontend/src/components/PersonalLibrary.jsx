@@ -40,6 +40,7 @@ export default function PersonalLibrary({
   picker = false,
   onAttach,
   onClose,
+  onBack,
   initialSection = "all",
   initialItemId = "",
 }) {
@@ -52,6 +53,7 @@ export default function PersonalLibrary({
   const [preferences, setPreferences] = useState({ auto_save_links: false });
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [attachingId, setAttachingId] = useState("");
   const [error, setError] = useState("");
@@ -70,18 +72,36 @@ export default function PersonalLibrary({
   const [menuKey, setMenuKey] = useState("");
   const inputRef = useRef(null);
   const viewerPointerStart = useRef(null);
+  const authFetchRef = useRef(authFetch);
+  const catalogRequestIdRef = useRef(0);
+  const appendInFlightRef = useRef(false);
+
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
 
   const loadCatalog = useCallback(async ({ append = false, before = "", nextSection = section, folderId = activeFolderId } = {}) => {
-    if (!append) setIsLoading(true);
+    if (append && appendInFlightRef.current) return;
+    const requestId = append ? catalogRequestIdRef.current : catalogRequestIdRef.current + 1;
+    if (!append) {
+      catalogRequestIdRef.current = requestId;
+      appendInFlightRef.current = false;
+      setIsLoadingMore(false);
+      setIsLoading(true);
+    } else {
+      appendInFlightRef.current = true;
+      setIsLoadingMore(true);
+    }
     setError("");
     try {
       const params = new URLSearchParams({ section: nextSection, limit: "30" });
       if (query.trim()) params.set("search", query.trim());
       if (folderId) params.set("folder_id", folderId);
       if (before) params.set("before", before);
-      const response = await authFetch(`/api/library/catalog?${params.toString()}`);
+      const response = await authFetchRef.current(`/api/library/catalog?${params.toString()}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Could not load your Library.");
+      if (requestId !== catalogRequestIdRef.current) return;
       const nextFiles = Array.isArray(data.files) ? data.files : [];
       setFiles((current) => append ? [...current, ...nextFiles.filter((row) => !current.some((item) => item.id === row.id))] : nextFiles);
       setFolders(Array.isArray(data.folders) ? data.folders : []);
@@ -91,16 +111,31 @@ export default function PersonalLibrary({
       setNextBefore(data.next_before || "");
       setHasMore(Boolean(data.has_more));
     } catch (requestError) {
-      setError(requestError.message || "Could not load your Library.");
+      if (requestId === catalogRequestIdRef.current) setError(requestError.message || "Could not load your Library.");
     } finally {
-      setIsLoading(false);
+      if (requestId === catalogRequestIdRef.current) {
+        if (append) {
+          appendInFlightRef.current = false;
+          setIsLoadingMore(false);
+        } else {
+          setIsLoading(false);
+        }
+      }
     }
-  }, [activeFolderId, authFetch, query, section]);
+  }, [activeFolderId, query, section]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void loadCatalog(), query ? 220 : 0);
     return () => window.clearTimeout(timeoutId);
   }, [loadCatalog, query]);
+
+  useEffect(() => {
+    if (isLoading || isLoadingMore || !hasMore || !nextBefore || section === "folders" || section === "links") return undefined;
+    const timeoutId = window.setTimeout(() => {
+      void loadCatalog({ append: true, before: nextBefore });
+    }, 120);
+    return () => window.clearTimeout(timeoutId);
+  }, [hasMore, isLoading, isLoadingMore, loadCatalog, nextBefore, section]);
 
   useEffect(() => {
     if (!initialItemId || isLoading) return;
@@ -381,7 +416,7 @@ export default function PersonalLibrary({
   return (
     <section className={`personal-library ${picker ? "is-picker" : ""}`} aria-label={picker ? "Choose from Library" : "Library"}>
       <header className="personal-library-header">
-        <div>{picker ? <button type="button" className="personal-library-back" onClick={onClose}><ArrowLeft aria-hidden="true" />Back to chat</button> : null}<p className="personal-library-eyebrow">Personal study resources</p><h1>{picker ? "Add from Library" : "Library"}</h1><p>Your files, images, recordings, transcripts and saved educational links in one private place.</p></div>
+        <div>{picker ? <button type="button" className="personal-library-back" onClick={onClose}><ArrowLeft aria-hidden="true" />Back to chat</button> : <button type="button" className="personal-library-back" onClick={() => onBack ? onBack() : window.history.back()}><ArrowLeft aria-hidden="true" />Back</button>}<p className="personal-library-eyebrow">Personal study resources</p><h1>{picker ? "Add from Library" : "Library"}</h1><p>Your files, images, recordings, transcripts and saved educational links in one private place.</p></div>
         {picker ? <button type="button" className="personal-library-close" onClick={onClose} aria-label="Close Library"><X aria-hidden="true" /></button> : <FolderOpen className="personal-library-heading-icon" aria-hidden="true" />}
       </header>
 
@@ -414,7 +449,8 @@ export default function PersonalLibrary({
         {activeFolderId ? <div className="library-folder-breadcrumb"><button type="button" onClick={() => setActiveFolderId("")}><ArrowLeft />All Files</button><strong>{folders.find((folder) => folder.id === activeFolderId)?.name}</strong></div> : null}
         {isLoading ? Array.from({ length: 5 }, (_, index) => <div className="personal-library-skeleton" key={index} />) : visibleItems.length ? visibleItems.map((item) => item.item_type === "folder" ? <article key={itemKey(item)} className="personal-library-row">{renderFavourite(item)}<button type="button" className="personal-library-file-main" onClick={() => { setActiveFolderId(item.id); setSection("all"); }}><Folder /><span><strong>{item.name}</strong><small>{item.item_count} items</small></span></button></article> : item.item_type === "link" ? <article key={itemKey(item)} className="personal-library-row"><button type="button" className="personal-library-file-main" onClick={() => picker ? void attachItem(item) : window.open(item.url, "_blank", "noopener,noreferrer")}><Link /><span><strong>{item.title}</strong><small>{item.domain} · saved {new Date(item.created_at).toLocaleDateString()}</small></span></button><div className="personal-library-row-actions">{renderFavourite(item)}{onAttach ? <button type="button" onClick={() => void attachItem(item)} aria-label="Add link to Chat"><Plus /></button> : null}<a href={item.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${item.title}`}><ExternalLink /></a><button type="button" onClick={() => void deleteItem(item)} aria-label={`Remove ${item.title}`}><Trash2 /></button></div></article> : renderFileRow(item)) : <div className="personal-library-empty"><FolderOpen /><h2>Nothing here yet</h2><p>{section === "favorites" ? "Use the star beside files, folders, images or links to keep important resources together." : "Upload a personal study source, save a useful link, or choose another Library section."}</p></div>}
       </div>}
-      {hasMore && section !== "folders" && section !== "links" ? <button type="button" className="personal-library-load-more" onClick={() => void loadCatalog({ append: true, before: nextBefore })}>Load older files</button> : null}
+      {isLoadingMore ? <div className="personal-library-progress" role="status"><LoaderCircle className="animate-spin" aria-hidden="true" />Loading more Library items...</div> : null}
+      {hasMore && !isLoadingMore && section !== "folders" && section !== "links" ? <button type="button" className="personal-library-load-more" onClick={() => void loadCatalog({ append: true, before: nextBefore })}>Load more now</button> : null}
 
       {storage ? <button type="button" className="personal-library-storage" onClick={() => setNotice("Storage deals remain unavailable until a verified payment-provider product is configured.")}><span><strong>Storage</strong><small>{formatBytes(storage.used_bytes)} of {formatBytes(storage.limit_bytes)} used</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><em>{formatBytes(storage.remaining_bytes)} remaining</em></button> : null}
 

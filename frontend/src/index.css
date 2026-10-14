@@ -15403,8 +15403,7 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
 .collaboration-profile-privacy { display:grid; gap:8px; margin-top:12px; }.collaboration-profile-privacy label { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#d8ebe4; font-size:11px; }.collaboration-profile-saved,.collaboration-profile-save-error { margin:12px 0 0; border-radius:9px; padding:8px 10px; font-size:11px; }.collaboration-profile-saved { background:rgba(16,185,129,.14); color:#8bf3ba; }.collaboration-profile-save-error { background:rgba(239,68,68,.13); color:#fecaca; }
 .collaboration-profile-summary { display:grid; gap:3px; margin-top:10px; border-radius:9px; background:rgba(16,185,129,.1); padding:9px; }.collaboration-profile-summary b { color:#87f2b8; font-size:11px; }.collaboration-profile-summary span,.collaboration-discovery-help { color:#9eb8ae; font-size:10px; line-height:1.45; }
 .collaboration-profile-popover :disabled { cursor:wait; opacity:.58; }
-.collaboration-profile-popover > p.mt-2,
-.collaboration-profile-popover > button.mt-4 { display:none; }
+.collaboration-profile-popover > p.mt-2 { display:none; }
 .collaboration-profile-contact-fields { display:grid; gap:9px; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,.08); }
 .collaboration-profile-contact-save { width:100%; min-height:40px; margin-top:3px; border-radius:10px; background:#10b981; color:#fff; font-size:13px; font-weight:700; }
 .collaboration-discover-contacts { display:grid; gap:8px; margin:10px; padding:10px; border:1px solid rgba(255,255,255,.08); border-radius:12px; background:#061b15; }
@@ -16080,8 +16079,8 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
 /* Final responsive controls: keep room actions reachable without oversized mobile gutters. */
 @media (max-width: 760px) {
   .collaboration-room-header {
-    min-height: 101px;
-    padding: 8px 9px 41px;
+    min-height: 148px;
+    padding: 8px 9px 88px;
   }
 
   .collaboration-room-heading {
@@ -16107,18 +16106,29 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
   }
 
   .collaboration-room-utility-actions {
-    top: 59px;
+    top: 103px;
     right: 7px;
-    gap: 3px;
+    left: 7px;
+    justify-content: flex-start;
+    gap: 5px;
   }
 
   .collaboration-room-utility-actions > button,
   .collaboration-room-utility-actions .collaboration-activity-button {
-    width: 31px;
-    min-width: 31px;
-    height: 31px;
-    min-height: 31px;
+    width: auto;
+    min-width: 0;
+    height: 34px;
+    min-height: 34px;
     border-radius: 8px;
+    padding: 0 8px;
+    font-size: 9px;
+  }
+
+  .collaboration-room-utility-actions .collaboration-activity-button::after {
+    margin-left: 5px;
+    content: "Activity";
+    font-size: 9px;
+    font-weight: 700;
   }
 
   .collaboration-room-utility-actions svg {
@@ -16130,15 +16140,39 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
     position: absolute;
     z-index: 76;
     top: 59px;
-    right: 109px;
+    right: auto;
+    left: 9px;
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 5px;
   }
 
   .collaboration-room-actions > .collaboration-avatar-stack,
   .collaboration-room-actions > .collaboration-outline-button {
-    display: none;
+    display: inline-flex;
+  }
+
+  .collaboration-room-actions > .collaboration-avatar-stack {
+    min-height: 34px;
+    align-items: center;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 8px;
+    background: #0a211b;
+    padding: 0 8px;
+  }
+
+  .collaboration-room-actions > .collaboration-avatar-stack span {
+    width: 24px;
+    height: 24px;
+    margin-left: -5px;
+    font-size: 7px;
+  }
+
+  .collaboration-room-actions > .collaboration-outline-button {
+    min-height: 34px;
+    border-radius: 8px;
+    padding: 0 9px;
+    font-size: 9px;
   }
 
   .collaboration-room-actions > .collaboration-primary-button,
@@ -16156,7 +16190,7 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
 
   .collaboration-room-actions > .collaboration-admin-control-button span,
   .collaboration-admin-control-actions > button span {
-    display: none;
+    display: inline;
   }
 
   .collaboration-admin-control-actions {
@@ -16170,10 +16204,10 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
 
   .collaboration-admin-control-actions .is-menu {
     display: inline-flex;
-    width: 31px;
-    min-width: 31px;
-    min-height: 31px;
-    padding: 0;
+    width: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0 7px;
   }
 
   .collaboration-admin-control-menu {
