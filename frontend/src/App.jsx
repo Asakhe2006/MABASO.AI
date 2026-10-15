@@ -32789,7 +32789,7 @@ export default function App() {
         ) : null}
       </main>
       {renderMobileAppNavigation()}
+      {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}
     </div>
   );
 }
-        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}
