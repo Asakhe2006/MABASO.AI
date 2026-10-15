@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
+import json
 from typing import Any, Callable
 from uuid import uuid4
+import zipfile
 
 from fastapi import Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from library_catalog import (
     LibraryBulkUpdate,
+    LibraryDeleteAllRequest,
     LibraryFileUpdate,
     LibraryFolderCreate,
     LibraryFolderUpdate,
@@ -19,6 +24,7 @@ from library_catalog import (
     LibraryPreferenceUpdate,
     clean_folder_name,
     normalize_saved_link,
+    normalize_library_settings,
     serialize_folder,
     serialize_link,
 )
@@ -40,6 +46,28 @@ def register_library_routes(
     library_storage_error: type[Exception],
     enforce_rate_limit: Callable[..., Any],
 ) -> None:
+    def read_settings(email: str) -> dict[str, Any]:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT library_settings_json, library_auto_save_links FROM users WHERE lower(email) = ? LIMIT 1",
+                (normalize_email(email),),
+            ).fetchone()
+        raw: dict[str, Any] = {}
+        if row:
+            try:
+                raw = json.loads(row["library_settings_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                raw = {}
+            raw["auto_save_links"] = bool(int(row["library_auto_save_links"] or 0))
+        return normalize_library_settings(raw)
+
+    def owned_folder_ids(connection: Any, email: str, folder_ids: list[str]) -> list[str]:
+        verified: list[str] = []
+        for folder_id in list(dict.fromkeys(compact_text(item) for item in folder_ids if compact_text(item)))[:100]:
+            if owned_folder(connection, email, folder_id):
+                verified.append(folder_id)
+        return verified
+
     def owned_folder(connection: Any, email: str, folder_id: str) -> Any:
         if not compact_text(folder_id):
             return None
@@ -107,15 +135,22 @@ def register_library_routes(
         folder_id: str = Query(default="", max_length=80),
         before: str = Query(default="", max_length=80),
         limit: int = Query(default=30, ge=1, le=60),
+        sort: str = Query(default="", max_length=30),
         current_user: str = Depends(require_authenticated_user),
     ):
         normalized_email = normalize_email(current_user)
+        settings = await asyncio.to_thread(read_settings, normalized_email)
         normalized_section = compact_text(section, "all").lower()
         where = ["lower(owner_email) = ?", "deleted_at = ''"]
         params: list[Any] = [normalized_email]
         if compact_text(search):
-            where.append("lower(original_name) LIKE ?")
-            params.append(f"%{compact_text(search).lower()}%")
+            pattern = f"%{compact_text(search).lower()}%"
+            if settings["search_file_contents"]:
+                where.append("(lower(original_name) LIKE ? OR lower(extracted_text) LIKE ?)")
+                params.extend([pattern, pattern])
+            else:
+                where.append("lower(original_name) LIKE ?")
+                params.append(pattern)
         if compact_text(folder_id):
             where.append("folder_id = ?")
             params.append(compact_text(folder_id))
@@ -137,9 +172,17 @@ def register_library_routes(
                 where.append("created_at < ?")
                 params.append(cursor)
         params.append(limit + 1)
+        normalized_sort = compact_text(sort, settings["default_sort"]).lower()
+        order_by = {
+            "oldest": "created_at ASC, id ASC",
+            "name_asc": "lower(original_name) ASC, id ASC",
+            "name_desc": "lower(original_name) DESC, id DESC",
+            "largest": "size_bytes DESC, id DESC",
+            "smallest": "size_bytes ASC, id ASC",
+        }.get(normalized_sort, "created_at DESC, id DESC")
         with get_db_connection() as connection:
             file_rows = connection.execute(
-                f"SELECT * FROM library_files WHERE {' AND '.join(where)} ORDER BY created_at DESC, id DESC LIMIT ?",
+                f"SELECT * FROM library_files WHERE {' AND '.join(where)} ORDER BY {order_by} LIMIT ?",
                 tuple(params),
             ).fetchall()
             folder_rows = connection.execute(
@@ -166,9 +209,6 @@ def register_library_routes(
                     f"SELECT * FROM library_links WHERE {' AND '.join(link_where)} ORDER BY created_at DESC, id DESC LIMIT ?",
                     tuple(link_params),
                 ).fetchall()
-            preference = connection.execute(
-                "SELECT library_auto_save_links FROM users WHERE lower(email) = ? LIMIT 1", (normalized_email,)
-            ).fetchone()
         has_more = len(file_rows) > limit
         page = file_rows[:limit]
         return {
@@ -178,7 +218,7 @@ def register_library_routes(
             "next_before": f"{compact_text(page[-1]['created_at'])}|{compact_text(page[-1]['id'])}" if has_more and page else "",
             "has_more": has_more,
             "storage": await asyncio.to_thread(get_library_storage_summary, normalized_email),
-            "preferences": {"auto_save_links": bool(int(preference["library_auto_save_links"] or 0)) if preference else False},
+            "preferences": settings,
         }
 
     @app.get("/api/library/overview")
@@ -305,11 +345,6 @@ def register_library_routes(
             file_rows = connection.execute(
                 "SELECT * FROM library_files WHERE folder_id = ? AND lower(owner_email) = ? AND deleted_at = ''", (folder_id, email)
             ).fetchall()
-        if delete_contents and file_rows:
-            try:
-                await asyncio.to_thread(library_object_storage.delete, [compact_text(row["object_key"]) for row in file_rows])
-            except library_storage_error as exc:
-                raise HTTPException(status_code=502, detail="The folder contents could not be removed from private storage. No records were changed.") from exc
         now_iso = utc_now().isoformat()
         with get_db_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -437,9 +472,7 @@ def register_library_routes(
 
     @app.get("/api/library/preferences")
     async def get_library_preferences(current_user: str = Depends(require_authenticated_user)):
-        with get_db_connection() as connection:
-            row = connection.execute("SELECT library_auto_save_links FROM users WHERE lower(email) = ? LIMIT 1", (normalize_email(current_user),)).fetchone()
-        return {"auto_save_links": bool(int(row["library_auto_save_links"] or 0)) if row else False}
+        return await asyncio.to_thread(read_settings, current_user)
 
     @app.patch("/api/library/preferences")
     async def update_library_preferences(
@@ -448,10 +481,160 @@ def register_library_routes(
         current_user: str = Depends(require_authenticated_user),
     ):
         email = normalize_email(current_user)
+        updates = payload.model_dump(exclude_unset=True)
         with get_db_connection() as connection:
-            connection.execute("UPDATE users SET library_auto_save_links = ?, updated_at = ? WHERE lower(email) = ?", (int(payload.auto_save_links), utc_now().isoformat(), email))
-        record_audit_log(action="library.preferences.updated", email=email, request=request, resource_type="library_preferences", metadata={"auto_save_links": payload.auto_save_links})
-        return {"auto_save_links": payload.auto_save_links}
+            current = read_settings(email)
+            if "selected_folder_ids" in updates:
+                updates["selected_folder_ids"] = owned_folder_ids(connection, email, updates["selected_folder_ids"] or [])
+            if "excluded_folder_ids" in updates:
+                updates["excluded_folder_ids"] = owned_folder_ids(connection, email, updates["excluded_folder_ids"] or [])
+            next_settings = normalize_library_settings({**current, **updates})
+            connection.execute(
+                "UPDATE users SET library_settings_json = ?, library_auto_save_links = ?, updated_at = ? WHERE lower(email) = ?",
+                (json.dumps(next_settings, separators=(",", ":")), int(next_settings["auto_save_links"]), utc_now().isoformat(), email),
+            )
+        record_audit_log(action="library.preferences.updated", email=email, request=request, resource_type="library_preferences", metadata={"changed": sorted(updates)})
+        return next_settings
+
+    @app.get("/api/library/recently-deleted")
+    async def list_recently_deleted(current_user: str = Depends(require_authenticated_user)):
+        email = normalize_email(current_user)
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM library_files WHERE lower(owner_email) = ? AND deleted_at <> '' ORDER BY deleted_at DESC LIMIT 100",
+                (email,),
+            ).fetchall()
+        return {"files": [{**serialize_library_file(row), "deleted_at": compact_text(row["deleted_at"])} for row in rows]}
+
+    @app.post("/api/library/recently-deleted/{file_id}/restore")
+    async def restore_deleted_library_file(
+        file_id: str,
+        request: Request,
+        current_user: str = Depends(require_authenticated_user),
+    ):
+        email = normalize_email(current_user)
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM library_files WHERE id = ? AND lower(owner_email) = ? AND deleted_at <> '' LIMIT 1",
+                (compact_text(file_id), email),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Deleted Library file not found.")
+        storage = await asyncio.to_thread(get_library_storage_summary, email)
+        size_bytes = int(row["size_bytes"] or 0)
+        if size_bytes > int(storage.get("remaining_bytes") or 0):
+            raise HTTPException(status_code=409, detail="There is not enough Library storage to restore this file.")
+        now_iso = utc_now().isoformat()
+        with get_db_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE library_files SET deleted_at = '', status = 'ready', folder_id = CASE WHEN EXISTS (SELECT 1 FROM library_folders WHERE id = library_files.folder_id AND lower(owner_email) = ? AND deleted_at = '') THEN folder_id ELSE '' END, updated_at = ? WHERE id = ? AND lower(owner_email) = ? AND deleted_at <> ''",
+                (email, now_iso, file_id, email),
+            )
+            connection.execute(
+                "INSERT INTO library_storage_accounts (owner_email, committed_bytes, reserved_bytes, updated_at) VALUES (?, ?, 0, ?) ON CONFLICT(owner_email) DO UPDATE SET committed_bytes = library_storage_accounts.committed_bytes + excluded.committed_bytes, updated_at = excluded.updated_at",
+                (email, size_bytes, now_iso),
+            )
+            restored = connection.execute("SELECT * FROM library_files WHERE id = ? AND lower(owner_email) = ?", (file_id, email)).fetchone()
+        record_audit_log(action="library.file.restored", email=email, request=request, resource_type="library_file", resource_name=file_id)
+        return {"file": serialize_library_file(restored), "storage": await asyncio.to_thread(get_library_storage_summary, email)}
+
+    @app.delete("/api/library/recently-deleted/{file_id}")
+    async def permanently_delete_library_file(
+        file_id: str,
+        request: Request,
+        current_user: str = Depends(require_authenticated_user),
+    ):
+        email = normalize_email(current_user)
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM library_files WHERE id = ? AND lower(owner_email) = ? AND deleted_at <> '' LIMIT 1",
+                (compact_text(file_id), email),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Deleted Library file not found.")
+        try:
+            await asyncio.to_thread(library_object_storage.delete, [compact_text(row["object_key"])])
+        except library_storage_error as exc:
+            raise HTTPException(status_code=502, detail="The private file could not be permanently removed. Nothing was changed.") from exc
+        with get_db_connection() as connection:
+            connection.execute("DELETE FROM library_files WHERE id = ? AND lower(owner_email) = ? AND deleted_at <> ''", (file_id, email))
+        record_audit_log(action="library.file.permanently_deleted", email=email, request=request, resource_type="library_file", resource_name=file_id)
+        return {"deleted": True}
+
+    @app.post("/api/library/export")
+    async def export_library(
+        request: Request,
+        current_user: str = Depends(require_authenticated_user),
+    ):
+        enforce_rate_limit(scope="library_export", request=request, limit=3, window_seconds=3600, identity=current_user)
+        email = normalize_email(current_user)
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM library_files WHERE lower(owner_email) = ? AND deleted_at = '' ORDER BY created_at ASC",
+                (email,),
+            ).fetchall()
+            folders = connection.execute(
+                "SELECT id, name FROM library_folders WHERE lower(owner_email) = ? AND deleted_at = ''",
+                (email,),
+            ).fetchall()
+        folder_names = {compact_text(row["id"]): compact_text(row["name"], "Folder") for row in folders}
+
+        def build_export() -> bytes:
+            buffer = BytesIO()
+            manifest: list[dict[str, Any]] = []
+            used_names: set[str] = set()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+                for row in rows:
+                    display_name = compact_text(row["original_name"], "Library file")
+                    folder = folder_names.get(compact_text(row["folder_id"]), "")
+                    safe_name = "/".join(part for part in [folder, display_name] if part).replace("..", "_").replace("\\", "_")
+                    candidate, suffix = safe_name, 2
+                    while candidate.lower() in used_names:
+                        stem, dot, extension = safe_name.rpartition(".")
+                        candidate = f"{stem or safe_name} ({suffix}){dot}{extension}" if dot else f"{safe_name} ({suffix})"
+                        suffix += 1
+                    content = library_object_storage.get(compact_text(row["object_key"]))
+                    archive.writestr(candidate, content)
+                    used_names.add(candidate.lower())
+                    manifest.append({
+                        "id": compact_text(row["id"]), "name": display_name, "path": candidate,
+                        "content_type": compact_text(row["content_type"]), "size_bytes": int(row["size_bytes"] or 0),
+                        "created_at": compact_text(row["created_at"]), "source_type": compact_text(row["source_type"]),
+                    })
+                archive.writestr("mabaso-library-manifest.json", json.dumps({"exported_at": utc_now().isoformat(), "files": manifest}, indent=2))
+            return buffer.getvalue()
+
+        try:
+            content = await asyncio.to_thread(build_export)
+        except library_storage_error as exc:
+            raise HTTPException(status_code=502, detail="Library export could not read one of your private files. Please try again.") from exc
+        record_audit_log(action="library.export.created", email=email, request=request, resource_type="library", metadata={"file_count": len(rows)})
+        return Response(content=content, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=\"mabaso-library-export.zip\""})
+
+    @app.delete("/api/library/files")
+    async def delete_all_library_files(
+        payload: LibraryDeleteAllRequest,
+        request: Request,
+        current_user: str = Depends(require_authenticated_user),
+    ):
+        if payload.confirmation != "DELETE":
+            raise HTTPException(status_code=422, detail="Type DELETE to confirm.")
+        email = normalize_email(current_user)
+        now_iso = utc_now().isoformat()
+        with get_db_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE library_files SET deleted_at = ?, status = 'deleted', updated_at = ? WHERE lower(owner_email) = ? AND deleted_at = ''",
+                (now_iso, now_iso, email),
+            )
+            connection.execute(
+                "INSERT INTO library_storage_accounts (owner_email, committed_bytes, reserved_bytes, updated_at) VALUES (?, 0, 0, ?) ON CONFLICT(owner_email) DO UPDATE SET committed_bytes = 0, updated_at = excluded.updated_at",
+                (email, now_iso),
+            )
+        deleted_count = max(0, int(cursor.rowcount or 0))
+        record_audit_log(action="library.files.deleted_all", email=email, request=request, resource_type="library", metadata={"count": deleted_count})
+        return {"deleted": deleted_count, "storage": await asyncio.to_thread(get_library_storage_summary, email)}
 
     @app.post("/api/library/references/files/{file_id}")
     async def select_library_file_reference(

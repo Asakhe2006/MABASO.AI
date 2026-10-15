@@ -2,9 +2,10 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState } from
 import {
   ArrowLeft, Check, ChevronLeft, ChevronRight, Download, ExternalLink, File, FileAudio,
   FileImage, FileSpreadsheet, FileText, Folder, FolderOpen, FolderPlus, Images, Link,
-  LoaderCircle, Maximize2, Minus, MoreVertical, Plus, Search, Star, Trash2, UploadCloud, X,
+  LoaderCircle, Maximize2, Minus, MoreVertical, Plus, Search, Settings2, Star, Trash2, UploadCloud, X,
 } from "lucide-react";
 import "./PersonalLibrary.css";
+import LibrarySettingsPanel from "./LibrarySettingsPanel";
 
 const SECTIONS = [
   ["all", "All Files", FolderOpen],
@@ -51,7 +52,8 @@ export default function PersonalLibrary({
   const [folders, setFolders] = useState([]);
   const [links, setLinks] = useState([]);
   const [storage, setStorage] = useState(null);
-  const [preferences, setPreferences] = useState({ auto_save_links: false });
+  const [preferences, setPreferences] = useState({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -152,6 +154,13 @@ export default function PersonalLibrary({
       setSection("all");
     }
   }, [files, folders, initialItemId, isLoading]);
+
+  useEffect(() => {
+    if (!settingsOpen) return undefined;
+    const close = (event) => { if (event.key === "Escape") setSettingsOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!selectedFile) return undefined;
@@ -417,7 +426,7 @@ export default function PersonalLibrary({
   };
 
   return (
-    <section className={`personal-library ${picker ? "is-picker" : ""}`} aria-label={picker ? "Choose from Library" : "Library"}>
+    <section className={`personal-library ${picker ? "is-picker" : ""} ${preferences.default_view === "grid" ? "is-grid-view" : ""}`} aria-label={picker ? "Choose from Library" : "Library"}>
       <header className="personal-library-header">
         <div>{picker ? <button type="button" className="personal-library-back" onClick={onClose}><ArrowLeft aria-hidden="true" />Back to chat</button> : <button type="button" className="personal-library-back" onClick={() => onBack ? onBack() : window.history.back()}><ArrowLeft aria-hidden="true" />Back</button>}<p className="personal-library-eyebrow">Personal study resources</p><h1>{picker ? "Add from Library" : "Library"}</h1><p>Your files, images, recordings, transcripts and saved educational links in one private place.</p></div>
         {picker ? <button type="button" className="personal-library-close" onClick={onClose} aria-label="Close Library"><X aria-hidden="true" /></button> : <FolderOpen className="personal-library-heading-icon" aria-hidden="true" />}
@@ -429,6 +438,7 @@ export default function PersonalLibrary({
 
       <div className="personal-library-toolbar">
         <label><Search aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${activeFolderId ? "this folder" : "your Library"}…`} aria-label="Search Library" /></label>
+        {!picker ? <button type="button" className="is-secondary" onClick={() => setSettingsOpen(true)}><Settings2 aria-hidden="true" /><span>Settings</span></button> : null}
         <button type="button" className="is-secondary" onClick={() => setFolderDialog({ name: "" })}><FolderPlus aria-hidden="true" />New Folder</button>
         {section === "links" ? <button type="button" className="is-secondary" onClick={() => setLinkDialogOpen(true)}><Link aria-hidden="true" />Save link</button> : <button type="button" onClick={() => inputRef.current?.click()} disabled={isUploading || !storage?.storage_configured}><UploadCloud aria-hidden="true" />{isUploading ? "Uploading…" : "Upload files"}</button>}
         <input ref={inputRef} type="file" multiple accept="image/*,audio/*,.pdf,.docx,.pptx,.xlsx,.csv,.tsv,.txt,.md,.json,.xml,.html,.htm,.rtf,.odt,.ods,.odp" className="hidden" onChange={(event) => { void uploadFiles(event.target.files); event.target.value = ""; }} />
@@ -472,6 +482,7 @@ export default function PersonalLibrary({
         <header><button type="button" onClick={() => setSelectedFile(null)}><ArrowLeft />Back to Library</button><strong>{selectedFile.name}</strong><span className="library-viewer-actions">{selectedFile.category === "image" ? <><button type="button" onClick={() => setViewerZoom((value) => Math.max(.5, value - .25))} aria-label="Zoom out"><Minus /></button><button type="button" onClick={() => setViewerZoom(1)} aria-label="Fit image"><Maximize2 /></button><button type="button" onClick={() => setViewerZoom((value) => Math.min(4, value + .25))} aria-label="Zoom in"><Plus /></button></> : null}{renderFavourite(selectedFile)}{onAttach ? <button type="button" onClick={() => void attachItem(selectedFile)}>Add to Chat</button> : null}<a href={contentUrl(selectedFile, true)}><Download />Download</a><button type="button" onClick={() => setSelectedFile(null)} aria-label="Close viewer"><X /></button></span></header>
         {selectedFile.category === "image" ? <div className="library-image-viewer-stage"><button type="button" className="is-previous" onClick={() => navigateImage(-1)} aria-label="Previous image"><ChevronLeft /></button><img src={contentUrl(selectedFile)} alt={selectedFile.name} style={{ transform: `scale(${viewerZoom})` }} onDoubleClick={() => setViewerZoom((value) => value === 1 ? 2 : 1)} /><button type="button" className="is-next" onClick={() => navigateImage(1)} aria-label="Next image"><ChevronRight /></button></div> : previewable(selectedFile) ? <iframe title={selectedFile.name} src={contentUrl(selectedFile)} /> : <div className="personal-library-unavailable"><FileText /><h2>Preview is not available for this file type</h2><p>The original remains private. Download it and open it with Word, Excel, PowerPoint, or another compatible application.</p><a href={contentUrl(selectedFile, true)}>Download and open</a></div>}
       </div> : null}
+      {settingsOpen ? <LibrarySettingsPanel preferences={preferences} storage={storage} folders={folders} authFetch={authFetch} formatBytes={formatBytes} onClose={() => setSettingsOpen(false)} onSaved={setNotice} onError={setError} onSettingsChange={setPreferences} onManageStorage={() => { setSettingsOpen(false); setStorageDialogOpen(true); }} onReload={() => loadCatalog()} /> : null}
     </section>
   );
 }

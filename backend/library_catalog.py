@@ -11,7 +11,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 SENSITIVE_QUERY_KEYS = re.compile(
@@ -60,8 +60,118 @@ class LibraryLinkImport(BaseModel):
     links: list[LibraryLinkCreate] = Field(default_factory=list, max_length=20)
 
 
+LIBRARY_SEARCH_DEPTHS = {"quick", "balanced", "thorough"}
+LIBRARY_VIEWS = {"list", "grid"}
+LIBRARY_SORTS = {"newest", "oldest", "name_asc", "name_desc", "largest", "smallest"}
+LIBRARY_SEARCH_SCOPES = {"all", "selected"}
+LIBRARY_DUPLICATE_POLICIES = {"ask", "skip", "keep_both"}
+
+DEFAULT_LIBRARY_SETTINGS: dict[str, Any] = {
+    "automatic_search": False,
+    "search_depth": "balanced",
+    "show_sources": True,
+    "include_documents": True,
+    "include_images": False,
+    "include_recordings": True,
+    "include_links": False,
+    "auto_save_chat_uploads": True,
+    "auto_save_generated_files": True,
+    "auto_save_links": False,
+    "default_view": "list",
+    "default_sort": "newest",
+    "search_scope": "all",
+    "selected_folder_ids": [],
+    "excluded_folder_ids": [],
+    "duplicate_policy": "ask",
+    "search_file_contents": True,
+    "storage_warnings": True,
+}
+
+
+def normalize_library_settings(value: Any) -> dict[str, Any]:
+    supplied = value if isinstance(value, dict) else {}
+    result = dict(DEFAULT_LIBRARY_SETTINGS)
+    for key in (
+        "automatic_search", "show_sources", "include_documents", "include_images",
+        "include_recordings", "include_links", "auto_save_chat_uploads",
+        "auto_save_generated_files", "auto_save_links", "search_file_contents",
+        "storage_warnings",
+    ):
+        if key in supplied:
+            result[key] = bool(supplied[key])
+    for key, allowed in (
+        ("search_depth", LIBRARY_SEARCH_DEPTHS),
+        ("default_view", LIBRARY_VIEWS),
+        ("default_sort", LIBRARY_SORTS),
+        ("search_scope", LIBRARY_SEARCH_SCOPES),
+        ("duplicate_policy", LIBRARY_DUPLICATE_POLICIES),
+    ):
+        candidate = str(supplied.get(key, result[key]) or "").strip().lower()
+        result[key] = candidate if candidate in allowed else result[key]
+    for key in ("selected_folder_ids", "excluded_folder_ids"):
+        values = supplied.get(key, [])
+        result[key] = list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))[:100] if isinstance(values, list) else []
+    return result
+
+
 class LibraryPreferenceUpdate(BaseModel):
-    auto_save_links: bool
+    automatic_search: bool | None = None
+    search_depth: str | None = None
+    show_sources: bool | None = None
+    include_documents: bool | None = None
+    include_images: bool | None = None
+    include_recordings: bool | None = None
+    include_links: bool | None = None
+    auto_save_chat_uploads: bool | None = None
+    auto_save_generated_files: bool | None = None
+    auto_save_links: bool | None = None
+    default_view: str | None = None
+    default_sort: str | None = None
+    search_scope: str | None = None
+    selected_folder_ids: list[str] | None = Field(default=None, max_length=100)
+    excluded_folder_ids: list[str] | None = Field(default=None, max_length=100)
+    duplicate_policy: str | None = None
+    search_file_contents: bool | None = None
+    storage_warnings: bool | None = None
+
+    @field_validator("search_depth")
+    @classmethod
+    def validate_search_depth(cls, value: str | None):
+        if value is not None and value not in LIBRARY_SEARCH_DEPTHS:
+            raise ValueError("Choose quick, balanced, or thorough search.")
+        return value
+
+    @field_validator("default_view")
+    @classmethod
+    def validate_view(cls, value: str | None):
+        if value is not None and value not in LIBRARY_VIEWS:
+            raise ValueError("Choose list or grid view.")
+        return value
+
+    @field_validator("default_sort")
+    @classmethod
+    def validate_sort(cls, value: str | None):
+        if value is not None and value not in LIBRARY_SORTS:
+            raise ValueError("Choose a supported Library sort order.")
+        return value
+
+    @field_validator("search_scope")
+    @classmethod
+    def validate_scope(cls, value: str | None):
+        if value is not None and value not in LIBRARY_SEARCH_SCOPES:
+            raise ValueError("Choose all folders or selected folders.")
+        return value
+
+    @field_validator("duplicate_policy")
+    @classmethod
+    def validate_duplicate_policy(cls, value: str | None):
+        if value is not None and value not in LIBRARY_DUPLICATE_POLICIES:
+            raise ValueError("Choose ask, skip, or keep both.")
+        return value
+
+
+class LibraryDeleteAllRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=20)
 
 
 def row_value(row: Any, key: str, default: Any = "") -> Any:

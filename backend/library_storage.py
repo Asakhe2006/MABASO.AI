@@ -128,6 +128,35 @@ class SupabaseLibraryStorage:
                     provider_message=_safe_provider_message(created),
                 )
 
+    def bucket_status(self) -> dict[str, object]:
+        """Return safe configuration evidence without exposing the service key."""
+        if not self.configured:
+            return {"configured": False, "bucket": self.config.bucket, "project_host": "", "exists": False}
+        safe_bucket = quote(self.config.bucket, safe="")
+        try:
+            response = requests.get(
+                f"{self.config.base_url}/storage/v1/bucket/{safe_bucket}",
+                headers=self._headers(),
+                timeout=self.config.timeout_seconds,
+            )
+        except requests.RequestException:
+            return {
+                "configured": True,
+                "bucket": self.config.bucket,
+                "project_host": self.config.base_url.split("://", 1)[-1].split("/", 1)[0],
+                "exists": False,
+                "status_code": 0,
+                "provider_message": "Supabase Storage could not be reached.",
+            }
+        return {
+            "configured": True,
+            "bucket": self.config.bucket,
+            "project_host": self.config.base_url.split("://", 1)[-1].split("/", 1)[0],
+            "exists": response.status_code == 200,
+            "status_code": response.status_code,
+            "provider_message": _safe_provider_message(response),
+        }
+
     def put(self, object_key: str, content: bytes, content_type: str) -> None:
         if not self.configured:
             raise LibraryStorageError("Private Library storage is not configured.")
@@ -146,6 +175,9 @@ class SupabaseLibraryStorage:
 
         response = upload()
         if response.status_code == 404 and self.config.auto_create_bucket:
+            # A single authoritative bucket lookup is performed inside this
+            # method. It safely handles both a missing bucket and a bucket that
+            # another worker created concurrently, then retries the upload.
             self.ensure_private_bucket()
             response = upload()
         if response.status_code not in {200, 201}:
