@@ -54,7 +54,10 @@ def get_library_storage_config() -> LibraryStorageConfig:
         base_url=(os.getenv("SUPABASE_URL") or "").strip().rstrip("/"),
         service_key=(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip(),
         bucket=(os.getenv("SUPABASE_LIBRARY_BUCKET") or "mabaso-library").strip(),
-        timeout_seconds=max(5.0, float(os.getenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "12"))),
+        # Uploading an allowed 50 MB academic file can legitimately take more
+        # than twelve seconds from a Render instance. Keep the normal database
+        # timeout separate from the object-upload timeout.
+        timeout_seconds=max(15.0, float(os.getenv("SUPABASE_LIBRARY_UPLOAD_TIMEOUT_SECONDS", os.getenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "90")))),
         auto_create_bucket=(os.getenv("SUPABASE_LIBRARY_AUTO_CREATE_BUCKET", "false").strip().lower() in {"1", "true", "yes", "on"}),
         bucket_file_size_limit=max(1, int(os.getenv("SUPABASE_LIBRARY_BUCKET_FILE_SIZE_LIMIT", "52428800"))),
     )
@@ -173,7 +176,12 @@ class SupabaseLibraryStorage:
                 timeout=self.config.timeout_seconds,
             )
 
-        response = upload()
+        try:
+            response = upload()
+        except requests.Timeout as exc:
+            raise LibraryStorageError("Private object upload timed out.", provider_message="upload timeout") from exc
+        except requests.RequestException as exc:
+            raise LibraryStorageError("Private object upload could not reach Supabase.", provider_message="storage connection error") from exc
         if response.status_code == 404 and self.config.auto_create_bucket:
             # A single authoritative bucket lookup is performed inside this
             # method. It safely handles both a missing bucket and a bucket that

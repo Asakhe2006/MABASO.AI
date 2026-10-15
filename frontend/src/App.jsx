@@ -7423,6 +7423,7 @@ export default function App() {
   const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache(loadAdminDashboardRangePreference()));
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
   const [isOpeningAdminDashboard, setIsOpeningAdminDashboard] = useState(false);
+  const [isEnteringStudentView, setIsEnteringStudentView] = useState(false);
   const [timetableProfile, setTimetableProfile] = useState(createDefaultTimetableProfile);
   const [timetableSubjects, setTimetableSubjects] = useState(createDefaultTimetableSubjects);
   const [timetableAvailability, setTimetableAvailability] = useState(createDefaultTimetableAvailability);
@@ -21990,6 +21991,7 @@ export default function App() {
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
     if (targetMode === "admin") setIsOpeningAdminDashboard(true);
+    if (targetMode === "user" && authSessionMode === "admin") setIsEnteringStudentView(true);
     if (targetMode === authSessionMode) {
       try {
         if (targetMode === "admin") {
@@ -22002,6 +22004,7 @@ export default function App() {
         return;
       } finally {
         if (targetMode === "admin") setIsOpeningAdminDashboard(false);
+        if (targetMode === "user") setIsEnteringStudentView(false);
       }
     }
 
@@ -22045,6 +22048,7 @@ export default function App() {
       return undefined;
     } finally {
       if (targetMode === "admin") setIsOpeningAdminDashboard(false);
+      if (targetMode === "user") setIsEnteringStudentView(false);
       if (sessionModeSwitchPromiseRef.current?.promise === switchPromise) {
         sessionModeSwitchPromiseRef.current = null;
       }
@@ -31679,6 +31683,18 @@ export default function App() {
         onSupportFieldChange={updateSupportContactField}
         onSupportSubmit={submitEnterpriseSupportForm}
       />
+    );
+  }
+
+  if (authToken && isEnteringStudentView) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#07140f] px-5 text-white" aria-live="polite">
+        <div className="text-center">
+          <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-emerald-400" aria-hidden="true" />
+          <h1 className="mt-5 text-xl font-semibold">Opening student view...</h1>
+          <p className="mt-2 text-sm text-slate-300">Switching safely from the Admin Dashboard.</p>
+        </div>
+      </main>
     );
   }
 
