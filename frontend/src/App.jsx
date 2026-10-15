@@ -7558,7 +7558,7 @@ export default function App() {
     };
     void loadUnseen();
     return () => { cancelled = true; };
-  }, [authToken]);
+  }, [authToken, authEmail]);
   const handledChatCompletionIdsRef = useRef(new Set());
   useEffect(() => {
     if (!authToken || !authEmail) return undefined;
@@ -20764,7 +20764,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [authToken, authEmail]);
 
   useEffect(() => {
     if (!authToken || !isUpgradeModalOpen) return;
