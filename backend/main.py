@@ -19017,6 +19017,7 @@ def validate_payfast_server_confirmation(validation_string: str) -> None:
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail="PayFast validation could not be reached; the notification can be retried.") from exc
     if response.status_code != 200 or compact_text(response.text).upper() != "VALID":
+        logger.warning("PayFast ITN server validation rejected status=%s response=%s", response.status_code, compact_text(response.text)[:120] or "empty")
         raise HTTPException(status_code=400, detail="PayFast could not confirm this transaction notification.")
 
 
@@ -27870,6 +27871,7 @@ async def payfast_itn(request: Request):
     payload, expected_signature, validation_string = await parse_payfast_itn_payload(request)
     posted_signature = compact_text(payload.get("signature")).lower()
     if not posted_signature or not hmac.compare_digest(posted_signature, expected_signature.lower()):
+        logger.warning("PayFast ITN signature mismatch checkout=%s payment_status=%s", compact_text(payload.get("m_payment_id")), compact_text(payload.get("payment_status")))
         record_audit_log(
             action="billing.payfast.itn",
             status="failed",
@@ -27880,6 +27882,7 @@ async def payfast_itn(request: Request):
         )
         raise HTTPException(status_code=400, detail="Invalid PayFast signature.")
     if compact_text(payload.get("merchant_id")) != PAYFAST_MERCHANT_ID:
+        logger.warning("PayFast ITN merchant mismatch checkout=%s", compact_text(payload.get("m_payment_id")))
         raise HTTPException(status_code=400, detail="Invalid PayFast merchant.")
     validate_payfast_server_confirmation(validation_string)
 
