@@ -142,6 +142,23 @@ export default function PersonalLibrary({
   }, [hasMore, isLoading, isLoadingMore, loadCatalog, nextBefore, section]);
 
   useEffect(() => {
+    if (preferences.storage_warnings === false || !storage?.limit_bytes) return;
+    const percent = Math.round((Number(storage.used_bytes || 0) / Number(storage.limit_bytes)) * 100);
+    const threshold = percent >= 100 ? 100 : percent >= 95 ? 95 : percent >= 80 ? 80 : 0;
+    if (!threshold) return;
+    const warningKey = `mabaso.library.storage-warning.${threshold}.${storage.limit_bytes}`;
+    try {
+      if (window.sessionStorage.getItem(warningKey)) return;
+      window.sessionStorage.setItem(warningKey, "shown");
+    } catch { /* display the warning even if session storage is unavailable */ }
+    setNotice(threshold >= 100
+      ? "Library storage is full. Existing files remain available, but new permanent uploads are paused."
+      : threshold >= 95
+        ? `Library storage is ${percent}% full. Delete files or manage storage soon.`
+        : `Library storage is ${percent}% used.`);
+  }, [preferences.storage_warnings, storage?.limit_bytes, storage?.used_bytes]);
+
+  useEffect(() => {
     if (!initialItemId || isLoading) return;
     const requested = files.find((item) => item.id === initialItemId);
     if (requested) {
@@ -180,10 +197,19 @@ export default function PersonalLibrary({
     setError("");
     try {
       for (const file of chosen) {
-        const body = new FormData();
-        body.append("file", file);
-        const response = await authFetch("/api/library/files", { method: "POST", body, timeoutMs: 120000 });
-        const data = await response.json().catch(() => ({}));
+        const submitFile = async (duplicateAction = "") => {
+          const body = new FormData();
+          body.append("file", file);
+          if (duplicateAction) body.append("duplicate_action", duplicateAction);
+          const response = await authFetch("/api/library/files", { method: "POST", body, timeoutMs: 120000 });
+          return { response, data: await response.json().catch(() => ({})) };
+        };
+        let { response, data } = await submitFile();
+        if (response.status === 409 && data.detail?.code === "LIBRARY_DUPLICATE_FOUND") {
+          const keepBoth = window.confirm(`${file.name} is already in your Library. Select OK to keep both copies, or Cancel to skip this duplicate.`);
+          if (!keepBoth) continue;
+          ({ response, data } = await submitFile("keep_both"));
+        }
         const detail = data.detail && typeof data.detail === "object" ? data.detail.message : data.detail;
         if (!response.ok) throw new Error(detail || `Could not save ${file.name}.`);
       }

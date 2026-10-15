@@ -40315,12 +40315,12 @@ def get_library_storage_summary(email: str) -> dict[str, Any]:
     }
 
 
-def reserve_library_storage(email: str, size_bytes: int, checksum: str) -> dict[str, Any]:
+def reserve_library_storage(email: str, size_bytes: int, checksum: str, *, allow_duplicate: bool = False) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     now = utc_now()
     now_iso = now.isoformat()
     with get_db_connection() as connection:
-        existing = connection.execute(
+        existing = None if allow_duplicate else connection.execute(
             "SELECT * FROM library_files WHERE lower(owner_email) = ? AND checksum_sha256 = ? "
             "AND size_bytes = ? AND deleted_at = '' LIMIT 1",
             (normalized_email, checksum, int(size_bytes)),
@@ -40559,6 +40559,7 @@ async def list_library_files(
 async def upload_library_file(
     request: Request,
     file: UploadFile = File(...),
+    duplicate_action: str = Form(default=""),
     current_user: str = Depends(require_authenticated_user),
 ):
     if not file.filename:
@@ -40582,8 +40583,21 @@ async def upload_library_file(
     if not content:
         raise HTTPException(status_code=400, detail="The selected file is empty.")
     checksum = hashlib.sha256(content).hexdigest()
-    reservation = await asyncio.to_thread(reserve_library_storage, current_user, len(content), checksum)
+    settings = get_library_settings_for_user(current_user)
+    duplicate_policy = compact_text(settings.get("duplicate_policy"), "ask")
+    requested_duplicate_action = compact_text(duplicate_action).lower()
+    allow_duplicate = duplicate_policy == "keep_both" or requested_duplicate_action == "keep_both"
+    reservation = await asyncio.to_thread(reserve_library_storage, current_user, len(content), checksum, allow_duplicate=allow_duplicate)
     if reservation.get("existing"):
+        if duplicate_policy == "ask" and requested_duplicate_action not in {"skip", "keep_both"}:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LIBRARY_DUPLICATE_FOUND",
+                    "message": "This exact file is already in your Library.",
+                    "existing_file": reservation["existing"],
+                },
+            )
         return {"file": reservation["existing"], "deduplicated": True, "storage": await asyncio.to_thread(get_library_storage_summary, current_user)}
     saved = await asyncio.to_thread(
         commit_library_file,
