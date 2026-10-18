@@ -61,6 +61,10 @@ export default function PersonalLibrary({
   const [attachingId, setAttachingId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [storageCheckoutPackage, setStorageCheckoutPackage] = useState(null);
+  const [storagePaymentMethod, setStoragePaymentMethod] = useState("payfast");
+  const [isStartingStoragePayment, setIsStartingStoragePayment] = useState(false);
+  const [storagePaymentDetails, setStoragePaymentDetails] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [viewerZoom, setViewerZoom] = useState(1);
   const [selectedImageIds, setSelectedImageIds] = useState(new Set());
@@ -219,6 +223,51 @@ export default function PersonalLibrary({
       setError(uploadError.message || "The file could not be uploaded.");
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const submitProviderForm = (checkout) => {
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = checkout.checkout_url;
+    form.style.display = "none";
+    Object.entries(checkout.fields || {}).forEach(([name, value]) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = String(value ?? "");
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    window.HTMLFormElement.prototype.submit.call(form);
+  };
+
+  const startStoragePayment = async () => {
+    if (!storageCheckoutPackage || isStartingStoragePayment) return;
+    setIsStartingStoragePayment(true);
+    setError("");
+    try {
+      if (storagePaymentMethod === "payfast") {
+        const response = await authFetch("/api/library/storage/checkout", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ package_id: storageCheckoutPackage.id, provider: "payfast" }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || "PayFast checkout could not start.");
+        submitProviderForm(data);
+        return;
+      }
+      const response = await authFetch("/api/payments/create", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan_id: storageCheckoutPackage.id, product_type: "storage_addon" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "PayShap payment request could not be created.");
+      setStoragePaymentDetails(data);
+    } catch (paymentError) {
+      setError(paymentError.message || "Storage payment could not start.");
+    } finally {
+      setIsStartingStoragePayment(false);
     }
   };
 
@@ -496,7 +545,8 @@ export default function PersonalLibrary({
       {storageDialogOpen && storage ? <div className="library-dialog-backdrop" onPointerDown={() => setStorageDialogOpen(false)}><div className="library-dialog library-storage-dialog" role="dialog" aria-modal="true" aria-label="Manage storage" onPointerDown={(event) => event.stopPropagation()}>
         <header><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Back to Library"><ArrowLeft /></button><div><h2>Manage Storage</h2><p>{String(storage.plan_id || "free").replaceAll("_", " ")} plan · Personal Library</p></div><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Close storage manager"><X /></button></header>
         <section className="library-storage-summary"><span><strong>Your storage</strong><small>{formatBytes(storage.used_bytes)} / {formatBytes(storage.limit_bytes)}</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><p>{formatBytes(storage.remaining_bytes)} remaining</p></section>
-        <section><div className="library-storage-section-heading"><div><h3>Buy extra storage</h3><p>Keep your current AI plan and add Library space.</p></div></div><div className="library-storage-package-grid">{storagePackages.map((storagePackage) => <article key={storagePackage.id} className={storagePackage.recommended ? "is-recommended" : ""}><span>{storagePackage.recommended ? "Popular" : "Storage"}</span><h4>{storagePackage.name}</h4><strong>+{formatBytes(storagePackage.capacity_bytes)}</strong><p><b>R{storagePackage.amount_zar}</b> / month</p><small>New total: {formatBytes(Number(storage.limit_bytes || 0) + Number(storagePackage.capacity_bytes || 0))}</small><button type="button" disabled={!storage.addon_checkout?.enabled}> {storage.addon_checkout?.enabled ? "Select package" : "Payment setup required"}</button></article>)}</div><p className="library-storage-provider-note">{storage.addon_checkout?.message || "Storage-only checkout is not enabled yet."}</p></section>
+        <section><div className="library-storage-section-heading"><div><h3>Buy extra storage</h3><p>Keep your current AI plan and add Library space.</p></div></div><div className="library-storage-package-grid">{storagePackages.map((storagePackage) => <article key={storagePackage.id} className={storagePackage.recommended ? "is-recommended" : ""}><span>{storagePackage.recommended ? "Popular" : "Storage"}</span><h4>{storagePackage.name}</h4><strong>+{formatBytes(storagePackage.capacity_bytes)}</strong><p><b>R{storagePackage.amount_zar}</b> / month</p><small>New total: {formatBytes(Number(storage.base_limit_bytes || storage.limit_bytes || 0) + Number(storagePackage.capacity_bytes || 0))}</small><button type="button" disabled={!storage.addon_checkout?.enabled} onClick={() => { setStorageCheckoutPackage(storagePackage); setStoragePaymentDetails(null); setStoragePaymentMethod(storage.addon_checkout?.payfast_enabled ? "payfast" : "payshap"); }}>{storage.addon_checkout?.enabled ? "Buy extra storage" : "Payment setup required"}</button></article>)}</div><p className="library-storage-provider-note">{storage.addon_checkout?.message || "Storage payment is unavailable."}</p></section>
+        {storageCheckoutPackage ? <section className="library-storage-payment-step" aria-label="Choose storage payment method"><div className="library-storage-section-heading"><div><h3>Payment details</h3><p>{storageCheckoutPackage.name} · +{formatBytes(storageCheckoutPackage.capacity_bytes)} · R{storageCheckoutPackage.amount_zar}</p></div><button type="button" onClick={() => { setStorageCheckoutPackage(null); setStoragePaymentDetails(null); }} aria-label="Close payment details"><X /></button></div>{storagePaymentDetails ? <div className="library-payshap-details"><strong>Pay R{storagePaymentDetails.amount} with PayShap</strong><p>Open your banking app, choose PayShap, and use the exact reference below. Storage activates after the payment is verified.</p><dl><div><dt>PayShap number</dt><dd>{storagePaymentDetails.payment_details?.payshap_number}</dd></div><div><dt>Account name</dt><dd>{storagePaymentDetails.payment_details?.account_name}</dd></div><div><dt>Reference</dt><dd>{storagePaymentDetails.payment_reference}</dd></div></dl></div> : <><label className={!storage.addon_checkout?.payfast_enabled ? "is-disabled" : ""}><input type="radio" name="storage-payment" value="payfast" checked={storagePaymentMethod === "payfast"} disabled={!storage.addon_checkout?.payfast_enabled} onChange={() => setStoragePaymentMethod("payfast")} /><span><strong>PayFast</strong><small>Card payment. Renews monthly until cancelled.</small></span></label><label className={!storage.addon_checkout?.payshap_enabled ? "is-disabled" : ""}><input type="radio" name="storage-payment" value="payshap" checked={storagePaymentMethod === "payshap"} disabled={!storage.addon_checkout?.payshap_enabled} onChange={() => setStoragePaymentMethod("payshap")} /><span><strong>PayShap</strong><small>Pay once. Storage lasts 30 days. Use the exact reference.</small></span></label><button type="button" className="is-primary" onClick={() => void startStoragePayment()} disabled={isStartingStoragePayment}>{isStartingStoragePayment ? "Opening payment…" : `Continue with ${storagePaymentMethod === "payfast" ? "PayFast" : "PayShap"}`}</button></>}</section> : null}
         <section className="library-storage-upgrade"><div><h3>Upgrade your AI plan</h3><p>Increase included storage and unlock the plan's AI features.</p></div><button type="button" onClick={() => { setStorageDialogOpen(false); if (picker) onClose?.(); onUpgrade?.(); }} disabled={!onUpgrade}>Review plans</button></section>
       </div></div> : null}
 

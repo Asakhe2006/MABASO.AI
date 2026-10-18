@@ -268,6 +268,14 @@ LIBRARY_STORAGE_ADDON_CATALOG = (
     {"id": "storage_ultra", "name": "Storage Ultra", "capacity_bytes": 2 * 1024 * 1024 * 1024, "amount_zar": 119},
 )
 MAX_LIBRARY_FILE_BYTES = max(1024 * 1024, int(os.getenv("MAX_LIBRARY_FILE_BYTES", str(50 * 1024 * 1024))))
+
+
+def get_library_storage_package(package_id: str) -> dict[str, Any]:
+    normalized = str(package_id or "").strip().lower()
+    for item in LIBRARY_STORAGE_ADDON_CATALOG:
+        if item["id"] == normalized:
+            return dict(item)
+    raise HTTPException(status_code=400, detail="Select an available storage package.")
 library_object_storage = SupabaseLibraryStorage()
 APPLE_PRIVATE_KEY = os.getenv("APPLE_PRIVATE_KEY", "").strip()
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
@@ -7261,6 +7269,11 @@ class SessionModeRequest(BaseModel):
     mode: str = "user"
 
 
+class LibraryStorageCheckoutRequest(BaseModel):
+    package_id: str
+    provider: str = "payfast"
+
+
 class BillingCheckoutRequest(BaseModel):
     plan_id: str
     trial: bool = False
@@ -7292,6 +7305,7 @@ class PayFastSubscriptionRecoveryRequest(BaseModel):
 
 class PaymentCreateRequest(BaseModel):
     plan_id: str
+    product_type: str = "ai_subscription"
 
 
 class PdfSection(BaseModel):
@@ -9096,6 +9110,8 @@ def init_db():
         }
         payment_request_column_defaults = {
             "plan_id": "TEXT NOT NULL DEFAULT ''",
+            "product_type": "TEXT NOT NULL DEFAULT 'ai_subscription'",
+            "capacity_bytes": "BIGINT NOT NULL DEFAULT 0",
         }
         for column_name, column_definition in payment_request_column_defaults.items():
             if column_name not in payment_request_columns:
@@ -18763,7 +18779,11 @@ def list_admin_payment_requests(limit: int = 200) -> list[dict[str, Any]]:
 
 def create_manual_payment_request(email: str, plan_id: str) -> dict[str, Any]:
     require_payshap_configured()
-    plan = get_billing_plan(plan_id)
+    if compact_text(plan_id).lower().startswith("storage_"):
+        package = get_library_storage_package(plan_id)
+        plan = {"id": package["id"], "name": package["name"], "amount_zar": str(package["amount_zar"])}
+    else:
+        plan = get_billing_plan(plan_id)
     request_id = uuid4().hex
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
@@ -21639,6 +21659,51 @@ def recover_pending_payfast_trial(
     }
 
 
+def activate_library_storage_from_payfast(payload: dict[str, str], session: sqlite3.Row) -> str:
+    package = get_library_storage_package(session["plan_id"])
+    payment_status = compact_text(payload.get("payment_status")).upper()
+    if payment_status not in {"COMPLETE", "COMPLETE_PAYMENT"}:
+        return payment_status.lower() or "failed"
+    amount = format_zar_transaction_amount(payload.get("amount_gross"))
+    if amount != format_zar_transaction_amount(package["amount_zar"]):
+        raise HTTPException(status_code=400, detail="PayFast amount does not match the storage package.")
+    checkout_id = compact_text(session["id"])
+    email = normalize_email(session["email"])
+    now_iso = utc_now().isoformat()
+    provider_payment_id = compact_text(payload.get("pf_payment_id"), checkout_id)
+    raw_event_json = json.dumps(payload, ensure_ascii=False)
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE billing_checkout_sessions SET status = 'active', provider_payment_id = ?, "
+            "provider_token = COALESCE(NULLIF(?, ''), provider_token), raw_event_json = ?, updated_at = ? WHERE id = ?",
+            (provider_payment_id, compact_text(payload.get("token")), raw_event_json, now_iso, checkout_id),
+        )
+        connection.execute(
+            "UPDATE payment_requests SET status = 'verified', verified_at = ?, verified_by = 'payfast' "
+            "WHERE payment_reference = ? AND lower(email) = ?",
+            (now_iso, checkout_id, email),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_payments (
+                id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                amount_zar, payment_status, raw_event_json, paid_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'payfast', ?, ?, 'PAID', ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET payment_status = 'PAID', raw_event_json = excluded.raw_event_json,
+                paid_at = excluded.paid_at, updated_at = excluded.updated_at
+            """,
+            (provider_payment_id, email, checkout_id, package["id"], provider_payment_id,
+             amount, raw_event_json, now_iso, now_iso, now_iso),
+        )
+        connection.execute(
+            "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) "
+            "VALUES (?, ?, ?, 'payfast', 'STORAGE_PAYMENT_VERIFIED', ?, ?)",
+            (uuid4().hex, email, checkout_id, raw_event_json, now_iso),
+        )
+    return "active"
+
+
 async def process_payfast_subscription_event(payload: dict[str, Any]) -> dict[str, Any]:
     event_type = compact_text(payload.get("type")).lower()
     if event_type not in {"subscription.free-trial", "subscription.promo", "subscription.update"}:
@@ -21699,9 +21764,15 @@ def verify_manual_payment_request(payment_id: str, admin_email: str) -> dict[str
         current_status = normalize_payment_request_status(row["status"])
         if current_status != "pending":
             raise HTTPException(status_code=409, detail=f"This payment request is already {current_status}.")
-        plan_id = normalize_billing_plan_id(row["plan_id"])
-        if plan_id not in BILLING_PLAN_CONFIG:
-            raise HTTPException(status_code=400, detail="The payment request plan is no longer available.")
+        requested_product_id = compact_text(row["plan_id"]).lower()
+        is_storage_purchase = requested_product_id.startswith("storage_")
+        if is_storage_purchase:
+            get_library_storage_package(requested_product_id)
+            plan_id = requested_product_id
+        else:
+            plan_id = normalize_billing_plan_id(requested_product_id)
+            if plan_id not in BILLING_PLAN_CONFIG:
+                raise HTTPException(status_code=400, detail="The payment request plan is no longer available.")
         amount = format_zar_amount(row["amount"])
         payment_reference = compact_text(row["payment_reference"])
         raw_event = {
@@ -21771,16 +21842,17 @@ def verify_manual_payment_request(payment_id: str, admin_email: str) -> dict[str
                 now_iso,
             ),
         )
-        upsert_billing_subscription(
-            connection,
-            email=row["email"],
-            plan_id=plan_id,
-            provider="payshap",
-            provider_payment_id=payment_reference,
-            amount_zar=amount,
-            raw_event_json=raw_event_json,
-            now_iso=now_iso,
-        )
+        if not is_storage_purchase:
+            upsert_billing_subscription(
+                connection,
+                email=row["email"],
+                plan_id=plan_id,
+                provider="payshap",
+                provider_payment_id=payment_reference,
+                amount_zar=amount,
+                raw_event_json=raw_event_json,
+                now_iso=now_iso,
+            )
         updated_row = connection.execute(
             """
             SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
@@ -27695,6 +27767,62 @@ async def create_billing_checkout(
     }
 
 
+@app.post("/api/library/storage/checkout")
+async def create_library_storage_checkout(
+    payload: LibraryStorageCheckoutRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    if compact_text(payload.provider, "payfast").lower() != "payfast":
+        raise HTTPException(status_code=400, detail="Use the PayShap payment option for a once-off storage purchase.")
+    require_payfast_configured(require_subscription=True)
+    email = normalize_email(current_user)
+    package = get_library_storage_package(payload.package_id)
+    checkout_id = f"mabaso-storage-{uuid4().hex[:20]}"
+    plan = {
+        "id": package["id"],
+        "name": package["name"],
+        "amount_zar": format_zar_amount(package["amount_zar"]),
+        "description": f"{package['name']} Library storage add-on. Renews monthly until cancelled.",
+        "frequency": "3",
+        "cycles": "0",
+    }
+    fields = build_payfast_checkout_fields(
+        request=request, email=email, checkout_id=checkout_id, plan=plan, trial=False,
+    )
+    app_base_url = APP_PUBLIC_URL or str(request.base_url).rstrip("/")
+    fields.update({
+        "return_url": f"{app_base_url}/library?storage=success&session_id={quote(checkout_id)}",
+        "cancel_url": f"{app_base_url}/library?storage=cancelled&session_id={quote(checkout_id)}",
+        "custom_str4": "storage_addon",
+    })
+    fields.pop("signature", None)
+    fields["signature"] = get_payfast_signature(fields)
+    now_iso = utc_now().isoformat()
+    payment = create_manual_payment_request(email, package["id"])
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE payment_requests SET payment_reference = ? WHERE id = ?",
+            (checkout_id, payment["id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_checkout_sessions (
+                id, email, plan_id, amount_zar, provider, status,
+                checkout_fields_json, billing_country_at_purchase, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'payfast', 'pending', ?, '', ?, ?)
+            """,
+            (checkout_id, email, package["id"], plan["amount_zar"], json.dumps(fields, ensure_ascii=False), now_iso, now_iso),
+        )
+    return {
+        "provider": "payfast",
+        "checkout_mode": "subscription",
+        "checkout_id": checkout_id,
+        "checkout_url": PAYFAST_PROCESS_URL,
+        "fields": fields,
+    }
+
+
 @app.post("/payments/create")
 @app.post("/api/payments/create")
 async def create_payment_request_endpoint(
@@ -27756,8 +27884,13 @@ async def confirm_payment_submitted_endpoint(
         resource_name=payment["payment_reference"],
         metadata={"payment_request_id": payment["id"], "status": payment["status"]},
     )
+    is_storage_purchase = compact_text(payment["plan_id"]).lower().startswith("storage_")
     return {
-        "message": "Payment submission recorded. Your subscription will activate after manual verification.",
+        "message": (
+            "Payment submission recorded. Your extra storage will activate after verification."
+            if is_storage_purchase
+            else "Payment submission recorded. Your subscription will activate after manual verification."
+        ),
         "payment_request": payment,
     }
 
@@ -27891,7 +28024,10 @@ async def payfast_itn(request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Checkout session not found.")
 
-    status = upsert_paid_subscription_from_payfast(payload, session)
+    if compact_text(session["plan_id"]).lower().startswith("storage_"):
+        status = activate_library_storage_from_payfast(payload, session)
+    else:
+        status = upsert_paid_subscription_from_payfast(payload, session)
     record_audit_log(
         action="billing.payfast.itn",
         email=session["email"],
@@ -40282,6 +40418,43 @@ def retrieve_library_context(email: str, question: str) -> tuple[str, list[dict[
     return "\n\n".join(context_parts)[:12000], sources if settings["show_sources"] else []
 
 
+def get_active_library_storage_addon(email: str) -> dict[str, Any] | None:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT plan_id, amount, payment_reference, verified_at, created_at
+            FROM payment_requests
+            WHERE lower(email) = ? AND status = 'verified'
+              AND lower(plan_id) LIKE 'storage_%'
+            ORDER BY COALESCE(NULLIF(verified_at, ''), created_at) DESC
+            LIMIT 1
+            """,
+            (normalized_email,),
+        ).fetchone()
+    if not row:
+        return None
+    activated_at = parse_billing_datetime(row["verified_at"] or row["created_at"])
+    if not activated_at:
+        return None
+    expires_at = activated_at + timedelta(days=30)
+    if expires_at <= utc_now():
+        return None
+    package = dict(get_library_storage_package(row["plan_id"]))
+    package.update({
+        "activated_at": activated_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "payment_reference": compact_text(row["payment_reference"]),
+    })
+    return package
+
+
+def get_effective_library_storage_limit(email: str, plan_id: str) -> tuple[int, dict[str, Any] | None]:
+    addon = get_active_library_storage_addon(email)
+    base_limit = get_library_storage_limit(plan_id)
+    return base_limit + (int(addon["capacity_bytes"]) if addon else 0), addon
+
+
 def get_library_storage_summary(email: str) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     _, entitlement = get_effective_subscription_snapshot(normalized_email)
@@ -40293,27 +40466,27 @@ def get_library_storage_summary(email: str) -> dict[str, Any]:
         ).fetchone()
     used_bytes = int(row["committed_bytes"] or 0) if row else 0
     reserved_bytes = int(row["reserved_bytes"] or 0) if row else 0
-    limit_bytes = get_library_storage_limit(plan_id)
+    base_limit_bytes = get_library_storage_limit(plan_id)
+    limit_bytes, active_addon = get_effective_library_storage_limit(normalized_email, plan_id)
+    payfast_enabled = bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and PAYFAST_PASSPHRASE)
+    payshap_enabled = bool(PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER)
     return {
         "plan_id": plan_id,
         "used_bytes": max(0, used_bytes),
         "reserved_bytes": max(0, reserved_bytes),
         "limit_bytes": limit_bytes,
+        "base_limit_bytes": base_limit_bytes,
+        "addon_capacity_bytes": int(active_addon["capacity_bytes"]) if active_addon else 0,
+        "active_addon": active_addon,
         "remaining_bytes": max(0, limit_bytes - used_bytes - reserved_bytes),
         "over_capacity": used_bytes > limit_bytes,
         "storage_configured": library_object_storage.configured,
-        # Keep these offers visible while refusing to fake a purchase. Storage
-        # add-ons need their own provider product and entitlement lifecycle;
-        # an AI-plan checkout must never be reused to grant extra storage.
         "addon_catalog": [dict(package) for package in LIBRARY_STORAGE_ADDON_CATALOG],
         "addon_checkout": {
-            "enabled": False,
-            "payfast_enabled": False,
-            "payshap_enabled": False,
-            "message": (
-                "Storage-only checkout is not enabled yet. No payment will be requested until "
-                "provider verification and storage entitlement activation are connected."
-            ),
+            "enabled": payfast_enabled or payshap_enabled,
+            "payfast_enabled": payfast_enabled,
+            "payshap_enabled": payshap_enabled,
+            "message": "Choose PayFast for automatic monthly renewal or PayShap for 30 days of storage.",
         },
     }
 
@@ -40331,7 +40504,10 @@ def reserve_library_storage(email: str, size_bytes: int, checksum: str, *, allow
         if existing:
             return {"existing": serialize_library_file(existing), "reservation_id": ""}
     _, entitlement = get_effective_subscription_snapshot(normalized_email)
-    limit_bytes = get_library_storage_limit(compact_text(entitlement.get("plan_id"), "free"))
+    limit_bytes, _ = get_effective_library_storage_limit(
+        normalized_email,
+        compact_text(entitlement.get("plan_id"), "free"),
+    )
     reservation_id = uuid4().hex
     with get_db_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
