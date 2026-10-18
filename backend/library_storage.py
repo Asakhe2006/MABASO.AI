@@ -57,7 +57,7 @@ def get_library_storage_config() -> LibraryStorageConfig:
         # Uploading an allowed 50 MB academic file can legitimately take more
         # than twelve seconds from a Render instance. Keep the normal database
         # timeout separate from the object-upload timeout.
-        timeout_seconds=max(15.0, float(os.getenv("SUPABASE_LIBRARY_UPLOAD_TIMEOUT_SECONDS", os.getenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "90")))),
+        timeout_seconds=max(30.0, float(os.getenv("SUPABASE_LIBRARY_UPLOAD_TIMEOUT_SECONDS", "120"))),
         auto_create_bucket=(os.getenv("SUPABASE_LIBRARY_AUTO_CREATE_BUCKET", "false").strip().lower() in {"1", "true", "yes", "on"}),
         bucket_file_size_limit=max(1, int(os.getenv("SUPABASE_LIBRARY_BUCKET_FILE_SIZE_LIMIT", "52428800"))),
     )

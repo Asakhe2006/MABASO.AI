@@ -67,6 +67,8 @@ services:
         value: "true"
       - key: SUPABASE_LIBRARY_BUCKET_FILE_SIZE_LIMIT
         value: "52428800"
+      - key: SUPABASE_LIBRARY_UPLOAD_TIMEOUT_SECONDS
+        value: "120"
       - key: SUPABASE_REQUEST_TIMEOUT_SECONDS
         value: "12"
       - key: FREE_LIBRARY_STORAGE_BYTES

@@ -9,10 +9,18 @@ from fastapi import HTTPException
 
 from backend import main
 from backend.library_catalog import normalize_saved_link
-from backend.library_storage import LibraryStorageConfig, LibraryStorageError, SupabaseLibraryStorage
+from backend.library_storage import LibraryStorageConfig, LibraryStorageError, SupabaseLibraryStorage, get_library_storage_config
 
 
 class LibraryStorageProviderTests(unittest.TestCase):
+    def test_library_upload_timeout_does_not_inherit_short_database_timeout(self):
+        with patch.dict(
+            "backend.library_storage.os.environ",
+            {"SUPABASE_REQUEST_TIMEOUT_SECONDS": "12"},
+            clear=True,
+        ):
+            self.assertEqual(get_library_storage_config().timeout_seconds, 120)
+
     def test_missing_bucket_is_created_private_then_upload_is_retried(self):
         config = LibraryStorageConfig(
             base_url="https://project.supabase.co",

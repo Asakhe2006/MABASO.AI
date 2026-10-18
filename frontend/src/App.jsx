@@ -31,6 +31,7 @@ import AdminDiagnosticsPanel from "./components/AdminDiagnosticsPanel";
 import AdminRefundRequestsPanel from "./components/AdminRefundRequestsPanel";
 import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivityPanel";
 import LibrarySidebarSection from "./components/LibrarySidebarSection";
+import SavedMaterialsHub from "./components/SavedMaterialsHub";
 import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
@@ -10179,100 +10180,26 @@ export default function App() {
   );
 
   const historyPanel = showHistoryPanel ? (
-    <section className="materials-panel overflow-hidden p-3 sm:p-5 xl:p-6">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex items-start gap-4">
-          <button
-            type="button"
-            onClick={() => openProtectedAppPage(hasResults ? "workspace" : "capture")}
-            aria-label="Back from my materials"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-              <path d="M15 6 9 12l6 6M9 12h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-            </svg>
-          </button>
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Materials</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Saved materials</h2>
-          </div>
-        </div>
-        <div className="force-mobile-stack flex flex-wrap gap-3">
-          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div>
-          <button type="button" onClick={() => setIsClearHistoryConfirmOpen(true)} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Clear History</button>
-        </div>
-      </div>
-      {isClearHistoryConfirmOpen ? (
-        <div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="Confirm clear history">
-          <div className="confirm-panel">
-            <h3>Clear saved materials?</h3>
-            <p>This will delete this email's saved history from this browser and cannot be restored.</p>
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => setIsClearHistoryConfirmOpen(false)} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
-              <button type="button" onClick={clearHistory} className="rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white">Yes, clear history</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {lastRecordingAsset?.url ? (
-        <article className="mt-6 rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-5">
-          <div className="force-mobile-stack flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Last recording</p>
-              <h3 className="phone-safe-copy mt-2 text-lg font-semibold text-white">{lastRecordingAsset.name || "Mabaso lecture recording"}</h3>
-              <p className="mt-2 text-xs text-slate-300">{formatBytes(lastRecordingAsset.size || 0)} • {lastRecordingAsset.createdAt ? new Date(lastRecordingAsset.createdAt).toLocaleString() : "This session"}</p>
-            </div>
-            <a href={lastRecordingAsset.url} download={lastRecordingAsset.name || "mabaso-lecture.webm"} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Download recording</a>
-          </div>
-        </article>
-      ) : null}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        {historyItems.length ? historyItems.map((item) => (
-          <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p>
-                <h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{extractHistoryTitle(item.summary, item.title)}</h3>
-                <p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span>
-                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span>
-                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span>
-                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span>
-                </div>
-              </div>
-              <div className="force-mobile-stack flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onPointerEnter={() => { if (item.isCompactHistoryItem) void resolveFullHistoryItem(item); }}
-                  onFocus={() => { if (item.isCompactHistoryItem) void resolveFullHistoryItem(item); }}
-                  onClick={() => loadHistoryItem(item)}
-                  disabled={Boolean(openingHistoryItemId)}
-                  className={`rounded-full px-4 py-2 text-sm font-semibold disabled:cursor-wait disabled:opacity-60 ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}
-                >
-                  {openingHistoryItemId === item.id ? "Opening..." : activeHistoryId === item.id ? "Opened" : "Open now"}
-                </button>
-                <button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button>
-                <button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button>
-                <div className="material-more-anchor">
-                  <button type="button" onClick={() => toggleMaterialMoreMenu(item)} className="material-more-button" aria-label={`More actions for ${item.title}`} aria-haspopup="menu" aria-expanded={materialMenuItemId === item.id}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
-                  {materialMenuItemId === item.id ? <div className="material-more-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => publicShareRecords[item.id]?.url ? copyKnownMaterialShareLink(publicShareRecords[item.id]) : createMaterialPublicShare(item)}><Link className="h-4 w-4" />{publicShareRecords[item.id]?.url ? "Copy share link" : publicShareRecords[item.id]?.shareId ? "Create a new share link" : "Create share link"}</button>
-                    {publicShareRecords[item.id]?.shareId ? <button type="button" role="menuitem" onClick={() => updatePublicShareSnapshot(publicShareRecords[item.id])}><RefreshCw className="h-4 w-4" />Update shared version</button> : null}
-                    {publicShareRecords[item.id]?.shareId ? <button type="button" role="menuitem" onClick={() => { setMaterialMenuItemId(""); void disablePublicShare(publicShareRecords[item.id]); }}><X className="h-4 w-4" />Disable Link</button> : null}
-                    <button type="button" role="menuitem" onClick={() => removeHistoryItem(item.id)}><X className="h-4 w-4" />Remove from history</button>
-                  </div> : null}
-                </div>
-              </div>
-            </div>
-            <p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p>
-          </article>
-        )) : (
-          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">{isHistoryLoadingFromServer ? "Loading your saved materials for this email..." : <><p>Your saved workspace history will appear here after the first successful study guide on this account.</p><button type="button" onClick={() => void refreshHistoryFromServer()} className="mt-3 rounded-full border border-emerald-300/30 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-100">Retry saved materials</button></>}</div>
-        )}
-      </div>
-      {collaborationMaterialsSection}
-    </section>
+    <SavedMaterialsHub
+      items={historyItems}
+      loading={isHistoryLoadingFromServer}
+      rooms={sortedCollaborationRooms}
+      activeId={activeHistoryId}
+      openingId={openingHistoryItemId}
+      onBack={() => openProtectedAppPage(hasResults ? "workspace" : "capture")}
+      onOpen={(item) => void loadHistoryItem(item)}
+      onOpenTool={(item, targetTab) => void loadHistoryItem(item, { targetTab })}
+      onDownload={(item) => void downloadHistoryItemPdf(item)}
+      onShare={(item) => void createMaterialPublicShare(item)}
+      onDelete={(item) => { if (window.confirm(`Delete ${item.title || item.fileName || "this saved material"}?`)) void removeHistoryItem(item.id); }}
+      onToggleFlag={(item, field) => {
+        const updated = { ...item, [field]: !item[field], updatedAt: new Date().toISOString() };
+        setHistoryItems((current) => current.map((entry) => entry.id === item.id ? updated : entry));
+        void saveHistoryItemToServer(updated).catch(() => setError("Could not save that material change."));
+      }}
+      onOpenRoom={(roomId) => void openCollaborationRoom(roomId)}
+      onCreateRoom={() => openCollaborationPage({ refresh: true })}
+    />
   ) : null;
 
   const collaborationInvitePrompt = showCollaborationInvitePrompt ? (
@@ -23325,7 +23252,7 @@ export default function App() {
       setChatMessages([]);
       setChatReferenceImages([]);
       setActiveHistoryId(resolvedItem.id);
-      setActiveTab("guide");
+      setActiveTab(normalizeWorkspaceTabId(options.targetTab || "guide"));
     });
     if (options.collaboration) {
       openCollaborationPage({ refresh: false });
@@ -31921,8 +31848,8 @@ export default function App() {
       {modelAccessBlockOverlay}
       {renderPublicShareDialog()}
       {siteRatingModal}
-      <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
-        {currentPage !== "capture" && currentPage !== "workspace" && currentPage !== "collaboration" && currentPage !== "payments" ? (
+      <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${["timetable", "materials"].includes(currentPage) ? "max-w-[1700px]" : "max-w-7xl"}`}>
+        {currentPage !== "capture" && currentPage !== "workspace" && currentPage !== "collaboration" && currentPage !== "payments" && currentPage !== "materials" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
           </div>
@@ -32804,7 +32731,7 @@ export default function App() {
           document.body,
         ) : null}
       </main>
-      {renderMobileAppNavigation()}
+      {currentPage === "materials" ? null : renderMobileAppNavigation()}
       {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}
     </div>
   );
