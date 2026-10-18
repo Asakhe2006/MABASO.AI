@@ -23176,6 +23176,7 @@ export default function App() {
 
   const loadHistoryItem = async (item, options = {}) => {
     if (!item?.id || openingHistoryItemId) return;
+    const requestedTab = normalizeWorkspaceTabId(options.targetTab || "guide");
     setOpeningHistoryItemId(item.id);
     let resolvedItem;
     try {
@@ -23191,6 +23192,7 @@ export default function App() {
     setPresentationTemplateFile(null);
     if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    setActiveTab(requestedTab);
     startTransition(() => {
       setTranscript(resolvedItem.transcript || "");
       setSummary(normalizeStudyGuideContentSpacing(resolvedItem.summary || ""));
@@ -23252,7 +23254,6 @@ export default function App() {
       setChatMessages([]);
       setChatReferenceImages([]);
       setActiveHistoryId(resolvedItem.id);
-      setActiveTab(normalizeWorkspaceTabId(options.targetTab || "guide"));
     });
     if (options.collaboration) {
       openCollaborationPage({ refresh: false });
@@ -23260,7 +23261,8 @@ export default function App() {
       setStatus(`Opened ${resolvedItem.title} in this collaboration room.`);
     } else {
       openProtectedAppPage("workspace", { allowLoadedWorkspace: true });
-      setStatus(`Opened ${resolvedItem.title} in Study Guide.`);
+      const requestedLabel = workspaceTabs.find((tab) => tab.id === requestedTab)?.label || "Study Workspace";
+      setStatus(`Opened ${resolvedItem.title} in ${requestedLabel}.`);
     }
     setOpeningHistoryItemId("");
   };

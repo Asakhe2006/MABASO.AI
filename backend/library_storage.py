@@ -166,6 +166,7 @@ class SupabaseLibraryStorage:
         headers = {
             **self._headers(),
             "Content-Type": content_type or "application/octet-stream",
+            "Content-Length": str(len(content)),
             "x-upsert": "false",
         }
         def upload():
@@ -173,12 +174,25 @@ class SupabaseLibraryStorage:
                 self._object_url(object_key),
                 headers=headers,
                 data=content,
-                timeout=self.config.timeout_seconds,
+                timeout=(15, self.config.timeout_seconds),
             )
 
         try:
             response = upload()
         except requests.Timeout as exc:
+            # A provider may have committed the object even when Render timed
+            # out waiting for the response. Verify the exact private object
+            # before reporting failure so a successful upload is not discarded.
+            try:
+                probe = requests.head(
+                    self._object_url(object_key),
+                    headers=self._headers(),
+                    timeout=(10, 20),
+                )
+                if probe.status_code == 200:
+                    return
+            except requests.RequestException:
+                pass
             raise LibraryStorageError("Private object upload timed out.", provider_message="upload timeout") from exc
         except requests.RequestException as exc:
             raise LibraryStorageError("Private object upload could not reach Supabase.", provider_message="storage connection error") from exc
@@ -187,6 +201,8 @@ class SupabaseLibraryStorage:
             # method. It safely handles both a missing bucket and a bucket that
             # another worker created concurrently, then retries the upload.
             self.ensure_private_bucket()
+            response = upload()
+        if response.status_code >= 500:
             response = upload()
         if response.status_code not in {200, 201}:
             raise LibraryStorageError(

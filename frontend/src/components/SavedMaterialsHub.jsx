@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, CheckSquare, FileText, FlaskConical, Grid2X2, List, MoreVertical, Search, Star, StickyNote, UsersRound, X } from "lucide-react";
 import "./SavedMaterialsHub.css";
 
@@ -7,7 +7,9 @@ const summaryOf = (item) => String(item?.summary || item?.lectureNotes || "Open 
 const dateValue = (item) => new Date(item?.updatedAt || item?.createdAt || 0).getTime() || 0;
 
 function StudyGuideIntro({ ready, onDone, onSkip }) {
-  useEffect(() => { const id = window.setTimeout(onDone, 3000); return () => window.clearTimeout(id); }, [onDone]);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => { onDoneRef.current = onDone; }, [onDone]);
+  useEffect(() => { const id = window.setTimeout(() => onDoneRef.current?.(), 3000); return () => window.clearTimeout(id); }, []);
   return <div className="mabaso-book-intro" role="status" aria-live="polite">
     <button type="button" onClick={onSkip}>Skip</button>
     <div className="mabaso-book" aria-hidden="true"><i className="book-cover left" /><i className="book-spine" /><i className="book-cover right" /><span>M</span></div>
