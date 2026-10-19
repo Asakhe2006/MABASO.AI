@@ -35,6 +35,13 @@ const iconFor = (category) => {
 
 const itemKey = (item) => `${item.item_type || "file"}:${item.id}`;
 
+const readApiError = (payload, fallback) => {
+  if (typeof payload?.detail === "string" && payload.detail.trim()) return payload.detail;
+  if (typeof payload?.detail?.message === "string" && payload.detail.message.trim()) return payload.detail.message;
+  if (typeof payload?.message === "string" && payload.message.trim()) return payload.message;
+  return fallback;
+};
+
 export default function PersonalLibrary({
   apiBaseUrl,
   authFetch,
@@ -52,6 +59,8 @@ export default function PersonalLibrary({
   const [folders, setFolders] = useState([]);
   const [links, setLinks] = useState([]);
   const [storage, setStorage] = useState(null);
+  const [isStorageLoading, setIsStorageLoading] = useState(true);
+  const [storageError, setStorageError] = useState("");
   const [preferences, setPreferences] = useState({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -82,11 +91,40 @@ export default function PersonalLibrary({
   const viewerPointerStart = useRef(null);
   const authFetchRef = useRef(authFetch);
   const catalogRequestIdRef = useRef(0);
+  const storageRequestIdRef = useRef(0);
   const appendInFlightRef = useRef(false);
 
   useEffect(() => {
     authFetchRef.current = authFetch;
   }, [authFetch]);
+
+  const loadStorage = useCallback(async () => {
+    const requestId = storageRequestIdRef.current + 1;
+    storageRequestIdRef.current = requestId;
+    setIsStorageLoading(true);
+    setStorageError("");
+    try {
+      const response = await authFetchRef.current("/api/library/storage");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(readApiError(data, "Could not load your storage details."));
+      if (requestId !== storageRequestIdRef.current) return;
+      const nextStorage = data.storage || data;
+      if (!nextStorage || typeof nextStorage !== "object" || !Number.isFinite(Number(nextStorage.limit_bytes))) {
+        throw new Error("Storage details were incomplete. Please try again.");
+      }
+      setStorage(nextStorage);
+    } catch (requestError) {
+      if (requestId === storageRequestIdRef.current) {
+        setStorageError(requestError.message || "Could not load your storage details.");
+      }
+    } finally {
+      if (requestId === storageRequestIdRef.current) setIsStorageLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStorage();
+  }, [loadStorage]);
 
   const loadCatalog = useCallback(async ({ append = false, before = "", nextSection = section, folderId = activeFolderId } = {}) => {
     if (append && appendInFlightRef.current) return;
@@ -108,13 +146,17 @@ export default function PersonalLibrary({
       if (before) params.set("before", before);
       const response = await authFetchRef.current(`/api/library/catalog?${params.toString()}`);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Could not load your Library.");
+      if (!response.ok) throw new Error(readApiError(data, "Could not load your Library."));
       if (requestId !== catalogRequestIdRef.current) return;
       const nextFiles = Array.isArray(data.files) ? data.files : [];
       setFiles((current) => append ? [...current, ...nextFiles.filter((row) => !current.some((item) => item.id === row.id))] : nextFiles);
       setFolders(Array.isArray(data.folders) ? data.folders : []);
       setLinks(Array.isArray(data.links) ? data.links : []);
-      setStorage(data.storage || null);
+      if (data.storage) {
+        setStorage(data.storage);
+        setStorageError("");
+        setIsStorageLoading(false);
+      }
       setPreferences(data.preferences || { auto_save_links: false });
       setNextBefore(data.next_before || "");
       setHasMore(Boolean(data.has_more));
@@ -521,7 +563,7 @@ export default function PersonalLibrary({
 
       {error ? <div className="personal-library-error" role="alert">{error}<button type="button" onClick={() => { setError(""); void loadCatalog(); }}>Retry</button></div> : null}
       {notice ? <div className="personal-library-success" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="Dismiss"><X /></button></div> : null}
-      {!storage?.storage_configured && !isLoading ? <div className="personal-library-notice">Private object storage is not configured yet. Existing Library metadata remains protected, but new uploads are paused.</div> : null}
+      {storage && storage.storage_configured === false && !isStorageLoading ? <div className="personal-library-notice">Private object storage is not configured yet. Existing Library metadata remains protected, but new uploads are paused.</div> : null}
 
       {section === "links" ? <label className="library-link-setting"><input type="checkbox" checked={Boolean(preferences.auto_save_links)} onChange={(event) => void updateAutoSave(event.target.checked)} /><span><strong>Automatically save useful chat sources</strong><small>Verified links cited in AI Chat can be added here. URLs with private sign-in data are rejected.</small></span></label> : null}
 
@@ -540,14 +582,20 @@ export default function PersonalLibrary({
       {isLoadingMore ? <div className="personal-library-progress" role="status"><LoaderCircle className="animate-spin" aria-hidden="true" />Loading more Library items...</div> : null}
       {hasMore && !isLoadingMore && section !== "folders" && section !== "links" ? <button type="button" className="personal-library-load-more" onClick={() => void loadCatalog({ append: true, before: nextBefore })}>Load more now</button> : null}
 
-      {storage ? <button type="button" className="personal-library-storage" onClick={() => setStorageDialogOpen(true)}><span><strong>Storage</strong><small>{formatBytes(storage.used_bytes)} of {formatBytes(storage.limit_bytes)} used</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><em>{formatBytes(storage.remaining_bytes)} remaining · Manage storage</em></button> : null}
+      <button type="button" className={`personal-library-storage ${!storage ? "is-degraded" : ""}`} onClick={() => { setStorageDialogOpen(true); if (!storage && !isStorageLoading) void loadStorage(); }} aria-busy={isStorageLoading}>
+        <span><strong>Storage</strong><small>{storage ? `${formatBytes(storage.used_bytes)} of ${formatBytes(storage.limit_bytes)} used` : isStorageLoading ? "Checking your storage allowance…" : "Storage details are temporarily unavailable"}</small></span>
+        <span className="personal-library-storage-track"><i style={{ width: `${storage ? usagePercent : 0}%` }} /></span>
+        <em>{storage ? `${formatBytes(storage.remaining_bytes)} remaining · Manage storage` : isStorageLoading ? "Loading…" : "Open storage manager to retry"}</em>
+      </button>
 
-      {storageDialogOpen && storage ? <div className="library-dialog-backdrop" onPointerDown={() => setStorageDialogOpen(false)}><div className="library-dialog library-storage-dialog" role="dialog" aria-modal="true" aria-label="Manage storage" onPointerDown={(event) => event.stopPropagation()}>
-        <header><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Back to Library"><ArrowLeft /></button><div><h2>Manage Storage</h2><p>{String(storage.plan_id || "free").replaceAll("_", " ")} plan · Personal Library</p></div><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Close storage manager"><X /></button></header>
+      {storageDialogOpen ? <div className="library-dialog-backdrop" onPointerDown={() => setStorageDialogOpen(false)}><div className="library-dialog library-storage-dialog" role="dialog" aria-modal="true" aria-label="Manage storage" onPointerDown={(event) => event.stopPropagation()}>
+        <header><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Back to Library"><ArrowLeft /></button><div><h2>Manage Storage</h2><p>{storage ? `${String(storage.plan_id || "free").replaceAll("_", " ")} plan · Personal Library` : "Personal Library"}</p></div><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Close storage manager"><X /></button></header>
+        {!storage ? <section className="library-storage-unavailable" role="status"><LoaderCircle className={isStorageLoading ? "animate-spin" : ""} aria-hidden="true" /><h3>{isStorageLoading ? "Loading storage details…" : "Storage details are unavailable"}</h3><p>{storageError || "Your files remain protected. Retry to load your allowance and storage packages."}</p>{!isStorageLoading ? <button type="button" className="is-primary" onClick={() => void loadStorage()}>Retry</button> : null}</section> : <>
         <section className="library-storage-summary"><span><strong>Your storage</strong><small>{formatBytes(storage.used_bytes)} / {formatBytes(storage.limit_bytes)}</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><p>{formatBytes(storage.remaining_bytes)} remaining</p></section>
         <section><div className="library-storage-section-heading"><div><h3>Buy extra storage</h3><p>Keep your current AI plan and add Library space.</p></div></div><div className="library-storage-package-grid">{storagePackages.map((storagePackage) => <article key={storagePackage.id} className={storagePackage.recommended ? "is-recommended" : ""}><span>{storagePackage.recommended ? "Popular" : "Storage"}</span><h4>{storagePackage.name}</h4><strong>+{formatBytes(storagePackage.capacity_bytes)}</strong><p><b>R{storagePackage.amount_zar}</b> / month</p><small>New total: {formatBytes(Number(storage.base_limit_bytes || storage.limit_bytes || 0) + Number(storagePackage.capacity_bytes || 0))}</small><button type="button" disabled={!storage.addon_checkout?.enabled} onClick={() => { setStorageCheckoutPackage(storagePackage); setStoragePaymentDetails(null); setStoragePaymentMethod(storage.addon_checkout?.payfast_enabled ? "payfast" : "payshap"); }}>{storage.addon_checkout?.enabled ? "Buy extra storage" : "Payment setup required"}</button></article>)}</div><p className="library-storage-provider-note">{storage.addon_checkout?.message || "Storage payment is unavailable."}</p></section>
         {storageCheckoutPackage ? <section className="library-storage-payment-step" aria-label="Choose storage payment method"><div className="library-storage-section-heading"><div><h3>Payment details</h3><p>{storageCheckoutPackage.name} · +{formatBytes(storageCheckoutPackage.capacity_bytes)} · R{storageCheckoutPackage.amount_zar}</p></div><button type="button" onClick={() => { setStorageCheckoutPackage(null); setStoragePaymentDetails(null); }} aria-label="Close payment details"><X /></button></div>{storagePaymentDetails ? <div className="library-payshap-details"><strong>Pay R{storagePaymentDetails.amount} with PayShap</strong><p>Open your banking app, choose PayShap, and use the exact reference below. Storage activates after the payment is verified.</p><dl><div><dt>PayShap number</dt><dd>{storagePaymentDetails.payment_details?.payshap_number}</dd></div><div><dt>Account name</dt><dd>{storagePaymentDetails.payment_details?.account_name}</dd></div><div><dt>Reference</dt><dd>{storagePaymentDetails.payment_reference}</dd></div></dl></div> : <><label className={!storage.addon_checkout?.payfast_enabled ? "is-disabled" : ""}><input type="radio" name="storage-payment" value="payfast" checked={storagePaymentMethod === "payfast"} disabled={!storage.addon_checkout?.payfast_enabled} onChange={() => setStoragePaymentMethod("payfast")} /><span><strong>PayFast</strong><small>Card payment. Renews monthly until cancelled.</small></span></label><label className={!storage.addon_checkout?.payshap_enabled ? "is-disabled" : ""}><input type="radio" name="storage-payment" value="payshap" checked={storagePaymentMethod === "payshap"} disabled={!storage.addon_checkout?.payshap_enabled} onChange={() => setStoragePaymentMethod("payshap")} /><span><strong>PayShap</strong><small>Pay once. Storage lasts 30 days. Use the exact reference.</small></span></label><button type="button" className="is-primary" onClick={() => void startStoragePayment()} disabled={isStartingStoragePayment}>{isStartingStoragePayment ? "Opening payment…" : `Continue with ${storagePaymentMethod === "payfast" ? "PayFast" : "PayShap"}`}</button></>}</section> : null}
         <section className="library-storage-upgrade"><div><h3>Upgrade your AI plan</h3><p>Increase included storage and unlock the plan's AI features.</p></div><button type="button" onClick={() => { setStorageDialogOpen(false); if (picker) onClose?.(); onUpgrade?.(); }} disabled={!onUpgrade}>Review plans</button></section>
+        </>}
       </div></div> : null}
 
       {folderDialog ? <div className="library-dialog-backdrop" onPointerDown={() => setFolderDialog(null)}><div className="library-dialog" role="dialog" aria-modal="true" aria-label={folderDialog.folder ? "Rename folder" : "New folder"} onPointerDown={(event) => event.stopPropagation()}><h2>{folderDialog.folder ? "Rename folder" : "New folder"}</h2><input autoFocus value={folderDialog.name} onChange={(event) => setFolderDialog((current) => ({ ...current, name: event.target.value }))} placeholder="Folder name" maxLength={80} /><footer><button type="button" onClick={() => setFolderDialog(null)}>Cancel</button><button type="button" className="is-primary" onClick={() => void saveFolder()}>{folderDialog.folder ? "Save" : "Create"}</button></footer></div></div> : null}

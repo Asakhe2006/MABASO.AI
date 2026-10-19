@@ -21,6 +21,20 @@ class LibraryStorageProviderTests(unittest.TestCase):
         ):
             self.assertEqual(get_library_storage_config().timeout_seconds, 120)
 
+    def test_library_storage_accepts_new_supabase_secret_key_name(self):
+        with patch.dict(
+            "backend.library_storage.os.environ",
+            {
+                "SUPABASE_PROJECT_URL": "https://project.supabase.co",
+                "SUPABASE_SECRET_KEY": "sb_secret_backend_only",
+            },
+            clear=True,
+        ):
+            config = get_library_storage_config()
+        self.assertTrue(config.configured)
+        self.assertEqual(config.base_url, "https://project.supabase.co")
+        self.assertEqual(config.service_key, "sb_secret_backend_only")
+
     def test_missing_bucket_is_created_private_then_upload_is_retried(self):
         config = LibraryStorageConfig(
             base_url="https://project.supabase.co",
@@ -101,6 +115,42 @@ class PersonalLibraryTests(unittest.TestCase):
         package_ids = [package["id"] for package in main.LIBRARY_STORAGE_ADDON_CATALOG]
         self.assertEqual(package_ids, ["storage_mini", "storage_plus", "storage_max", "storage_ultra"])
         self.assertEqual([package["amount_zar"] for package in main.LIBRARY_STORAGE_ADDON_CATALOG], [23, 39, 69, 119])
+
+    def test_verified_billing_payment_grants_storage_without_payment_request_dependency(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(
+            """
+            CREATE TABLE billing_payments (
+                plan_id TEXT, amount_zar TEXT, provider_payment_id TEXT, payment_status TEXT,
+                email TEXT, paid_at TEXT, created_at TEXT
+            );
+            INSERT INTO billing_payments VALUES (
+                'storage_plus', '39.00', 'PF-STORAGE-1', 'PAID',
+                'student@example.test', '2099-10-19T10:00:00+00:00', '2099-10-19T10:00:00+00:00'
+            );
+            """
+        )
+
+        @contextmanager
+        def open_database():
+            yield connection
+
+        with patch.object(main, "get_db_connection", side_effect=open_database):
+            addon = main.get_active_library_storage_addon("student@example.test")
+        self.assertEqual(addon["id"], "storage_plus")
+        self.assertEqual(addon["capacity_bytes"], 500 * 1024 * 1024)
+
+    def test_missing_addon_billing_schema_does_not_break_base_library(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+
+        @contextmanager
+        def open_database():
+            yield connection
+
+        with patch.object(main, "get_db_connection", side_effect=open_database):
+            self.assertIsNone(main.get_active_library_storage_addon("student@example.test"))
 
     def test_library_accepts_audio_but_rejects_video_binaries(self):
         main.ensure_allowed_library_upload("lecture.wav", "audio/wav")

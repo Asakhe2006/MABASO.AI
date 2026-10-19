@@ -308,6 +308,11 @@
 .library-storage-dialog > header button:focus-visible { background: var(--library-green-soft); outline: 1px solid rgba(53, 229, 138, .35); }
 .library-storage-dialog > header svg { width: 17px; height: 17px; }
 .library-storage-dialog > section { display: grid; gap: 10px; border-top: 1px solid rgba(255, 255, 255, .08); padding-top: 14px; }
+.personal-library-storage.is-degraded { border-color: rgba(245, 158, 11, .28); }
+.library-storage-unavailable { justify-items: start; min-height: 160px; align-content: center; }
+.library-storage-unavailable > svg { width: 24px; height: 24px; color: #fbbf24; }
+.library-storage-unavailable h3 { color: #f8fafc; font-size: 15px; }
+.library-storage-unavailable .is-primary { min-height: 38px; border-radius: 10px; background: var(--library-green); padding: 0 14px; color: #022c22; font-size: 11px; font-weight: 850; }
 .library-storage-summary > span:first-child { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
 .library-storage-summary small,
 .library-storage-summary p { color: var(--library-muted); font-size: 11px; }

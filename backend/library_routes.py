@@ -128,6 +128,13 @@ def register_library_routes(
             row = connection.execute("SELECT * FROM library_links WHERE id = ?", (link_id,)).fetchone()
         return serialize_link(row), False
 
+    @app.get("/api/library/storage")
+    async def get_library_storage_status(
+        current_user: str = Depends(require_authenticated_user),
+    ):
+        """Load storage independently so catalog failures never hide billing controls."""
+        return await asyncio.to_thread(get_library_storage_summary, normalize_email(current_user))
+
     @app.get("/api/library/catalog")
     async def get_library_catalog(
         section: str = Query(default="all", max_length=30),

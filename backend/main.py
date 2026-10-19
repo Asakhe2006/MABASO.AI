@@ -40420,21 +40420,27 @@ def retrieve_library_context(email: str, question: str) -> tuple[str, list[dict[
 
 def get_active_library_storage_addon(email: str) -> dict[str, Any] | None:
     normalized_email = normalize_email(email)
-    with get_db_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT plan_id, amount, payment_reference, verified_at, created_at
-            FROM payment_requests
-            WHERE lower(email) = ? AND status = 'verified'
-              AND lower(plan_id) LIKE 'storage_%'
-            ORDER BY COALESCE(NULLIF(verified_at, ''), created_at) DESC
-            LIMIT 1
-            """,
-            (normalized_email,),
-        ).fetchone()
+    try:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT plan_id, amount_zar, provider_payment_id, paid_at, created_at
+                FROM billing_payments
+                WHERE lower(email) = ? AND upper(payment_status) IN ('PAID', 'COMPLETE', 'COMPLETE_PAYMENT', 'ACTIVE')
+                  AND lower(plan_id) LIKE 'storage_%'
+                ORDER BY COALESCE(NULLIF(paid_at, ''), created_at) DESC
+                LIMIT 1
+                """,
+                (normalized_email,),
+            ).fetchone()
+    except Exception as exc:
+        # Add-on capacity is optional. A rolling database migration must not
+        # take the user's base Library catalog or upload allowance offline.
+        logger.warning("Library storage add-on lookup unavailable email=%s error=%s", normalized_email, type(exc).__name__)
+        return None
     if not row:
         return None
-    activated_at = parse_billing_datetime(row["verified_at"] or row["created_at"])
+    activated_at = parse_billing_datetime(row["paid_at"] or row["created_at"])
     if not activated_at:
         return None
     expires_at = activated_at + timedelta(days=30)
@@ -40444,7 +40450,7 @@ def get_active_library_storage_addon(email: str) -> dict[str, Any] | None:
     package.update({
         "activated_at": activated_at.isoformat(),
         "expires_at": expires_at.isoformat(),
-        "payment_reference": compact_text(row["payment_reference"]),
+        "payment_reference": compact_text(row["provider_payment_id"]),
     })
     return package
 

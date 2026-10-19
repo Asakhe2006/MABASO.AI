@@ -51,8 +51,15 @@ class LibraryStorageConfig:
 
 def get_library_storage_config() -> LibraryStorageConfig:
     return LibraryStorageConfig(
-        base_url=(os.getenv("SUPABASE_URL") or "").strip().rstrip("/"),
-        service_key=(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip(),
+        base_url=(os.getenv("SUPABASE_URL") or os.getenv("SUPABASE_PROJECT_URL") or "").strip().rstrip("/"),
+        # Supabase supports the legacy JWT service-role key and its newer
+        # secret-key format. Both are backend-only credentials; never accept
+        # an anon/publishable key for private Library object operations.
+        service_key=(
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_SECRET_KEY")
+            or ""
+        ).strip(),
         bucket=(os.getenv("SUPABASE_LIBRARY_BUCKET") or "mabaso-library").strip(),
         # Uploading an allowed 50 MB academic file can legitimately take more
         # than twelve seconds from a Render instance. Keep the normal database
