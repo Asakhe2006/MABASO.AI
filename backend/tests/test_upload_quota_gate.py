@@ -1,14 +1,18 @@
+import asyncio
 import inspect
 import json
 import sqlite3
 import tempfile
 import unittest
+from io import BytesIO
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
+from starlette.datastructures import Headers, UploadFile
+from starlette.requests import Request
 
 from backend import main
 
@@ -18,14 +22,50 @@ class UploadQuotaGateTests(unittest.TestCase):
         source = inspect.getsource(main.extract_slide_text)
         reserve_at = source.index("consume_plan_quota(")
         read_at = source.index("await file.read()")
+        library_save_at = source.index("await persist_received_source_to_library(file_bytes)")
         pdf_extract_at = source.index("extract_slide_text_from_pdf")
         self.assertLess(reserve_at, read_at)
+        self.assertLess(read_at, library_save_at)
+        self.assertLess(library_save_at, pdf_extract_at)
         self.assertLess(read_at, pdf_extract_at)
         self.assertIn('quota_error_code="UPLOAD_LIMIT_REACHED"', source)
 
     def test_common_document_formats_are_supported(self):
         for extension in (".docx", ".pptx", ".xlsx", ".odt", ".ods", ".odp", ".pdf", ".rtf", ".csv"):
             self.assertIn(extension, main.ALLOWED_STUDY_SOURCE_EXTENSIONS)
+
+    def test_accepted_original_is_saved_even_when_later_pdf_extraction_fails(self):
+        request = Request({
+            "type": "http", "method": "POST", "path": "/extract-slide-text/",
+            "headers": [], "scheme": "https", "server": ("api.test", 443),
+            "client": ("127.0.0.1", 1234), "query_string": b"",
+        })
+        upload = UploadFile(
+            file=BytesIO(b"%PDF-1.7\naccepted original"),
+            filename="notes.pdf",
+            headers=Headers({"content-type": "application/pdf"}),
+        )
+        storage = MagicMock()
+        storage.configured = True
+        with (
+            patch.object(main, "library_object_storage", storage),
+            patch.object(main, "ensure_openai_key"),
+            patch.object(main, "enforce_rate_limit"),
+            patch.object(main, "consume_plan_quota", return_value={"usage_event_id": "usage-early-save"}),
+            patch.object(main, "reserve_library_storage", return_value={"reservation_id": "reservation-1", "existing": None}),
+            patch.object(main, "commit_library_file", return_value={"id": "library-file-1"}) as commit,
+            patch.object(main, "extract_slide_text_from_pdf", return_value=""),
+            patch.object(main, "extract_reference_images_from_pdf", return_value=[]),
+            patch.object(main, "record_audit_log"),
+            patch.object(main, "refund_usage_event"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(main.extract_slide_text(request, upload, "student@example.test"))
+
+        self.assertEqual(raised.exception.status_code, 422)
+        commit.assert_called_once()
+        self.assertEqual(commit.call_args.kwargs["source_type"], "study_source_upload")
+        self.assertEqual(commit.call_args.kwargs["extracted_text"], "")
 
     def test_concurrent_upload_reservations_cannot_exceed_allowance(self):
         with tempfile.TemporaryDirectory() as temp_dir:

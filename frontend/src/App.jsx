@@ -32180,6 +32180,7 @@ export default function App() {
                       { id: "capture", label: "Home", icon: GraduationCap, action: () => openProtectedAppPage("capture") },
                       { id: "workspace", label: "Study Workspace", icon: FolderOpen, action: () => {} },
                       { id: "materials", label: "My Materials", icon: FileText, action: () => openProtectedAppPage("materials") },
+                      { id: "library", label: "Library", icon: FolderOpen, action: () => openLibraryPage("all", "") },
                       { id: "collaboration", label: "Collaboration", icon: UsersRound, action: () => openCollaborationPage() },
                       { id: "timetable", label: "Timetable", icon: CalendarDays, action: () => openProtectedAppPage("timetable") },
                       { id: "voice", label: "AI Chat", icon: MessageCircle, action: () => openStudyChatPage() },

@@ -3,7 +3,7 @@ import os
 import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import Request
 from fastapi import HTTPException
@@ -24,7 +24,43 @@ def make_request() -> Request:
     })
 
 
+def make_webhook_request(body: bytes, content_type: str = "text/plain") -> Request:
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/api/billing/payfast/webhook",
+        "headers": [(b"content-type", content_type.encode("ascii"))],
+        "scheme": "https",
+        "server": ("api.example.test", 443),
+        "client": ("127.0.0.1", 1234),
+        "query_string": b"",
+    }, receive)
+
+
 class BillingIntegrationTests(unittest.TestCase):
+    def test_payfast_subscription_json_is_detected_without_json_content_type(self):
+        event = b'{"type":"subscription.free-trial","token":"provider-token-1234567890"}'
+        verified = {
+            "status": "trialing",
+            "email": "student@example.test",
+            "checkout_id": "mabaso-0123456789abcdef01234567",
+        }
+        with patch.object(main, "process_payfast_subscription_event", new=AsyncMock(return_value=verified)) as process, \
+                patch.object(main, "record_audit_log"):
+            response = asyncio.run(main.payfast_itn(make_webhook_request(event)))
+        self.assertEqual(response.body, b"OK")
+        process.assert_awaited_once()
+        self.assertEqual(process.call_args.args[0]["type"], "subscription.free-trial")
+
     def make_recovery_database(self, *, email="student@example.test", checkout_id="mabaso-0123456789abcdef01234567", token="", status="pending"):
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row

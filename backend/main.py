@@ -19003,9 +19003,17 @@ def build_payfast_checkout_fields(
     return fields
 
 
-async def parse_payfast_itn_payload(request: Request) -> tuple[dict[str, str], str, str]:
-    raw_body = (await request.body()).decode("utf-8", errors="replace")
-    pairs = parse_qsl(raw_body, keep_blank_values=True)
+async def parse_payfast_itn_payload(
+    request: Request,
+    raw_body: bytes | str | None = None,
+) -> tuple[dict[str, str], str, str]:
+    if raw_body is None:
+        raw_text = (await request.body()).decode("utf-8", errors="replace")
+    elif isinstance(raw_body, bytes):
+        raw_text = raw_body.decode("utf-8", errors="replace")
+    else:
+        raw_text = raw_body
+    pairs = parse_qsl(raw_text, keep_blank_values=True)
     payload: dict[str, str] = {}
     ordered_for_signature: dict[str, str] = {}
     for key, value in pairs:
@@ -20961,6 +20969,8 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     payment_status = compact_text(payload.get("payment_status")).upper()
     checkout_id = session["id"]
     email = normalize_email(compact_text(payload.get("custom_str1"), session["email"]))
+    if email != normalize_email(session["email"]):
+        raise HTTPException(status_code=409, detail="PayFast customer does not match the checkout session.")
     plan_id = normalize_billing_plan_id(compact_text(payload.get("custom_str2"), session["plan_id"]))
     try:
         checkout_fields = json.loads(compact_text(session["checkout_fields_json"], "{}"))
@@ -20987,8 +20997,9 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     )
     now_iso = utc_now().isoformat()
     is_initial_trial_activation = is_trial_checkout and amount_gross == "0.00"
+    is_recurring_checkout = compact_text(checkout_fields.get("subscription_type")) == "1"
     if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"}:
-        next_status = "active"
+        next_status = "active" if (provider_token or not is_recurring_checkout) else "confirmation_pending"
     elif payment_status in {"PENDING", "PROCESSING"} and (provider_payment_id or provider_token):
         # Only a signed, server-validated PayFast notification reaches this
         # function. Creating a local checkout never means PayFast accepted it.
@@ -20998,6 +21009,14 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     payment_id = provider_payment_id or checkout_id
 
     with get_db_connection() as connection:
+        if is_initial_trial_activation:
+            existing_trial_payment = connection.execute(
+                "SELECT id, payment_status FROM billing_payments WHERE checkout_session_id = ? "
+                "AND amount_zar = '0.00' ORDER BY created_at ASC LIMIT 1",
+                (checkout_id,),
+            ).fetchone()
+            if existing_trial_payment:
+                payment_id = compact_text(existing_trial_payment["id"], payment_id)
         existing_payment = connection.execute(
             "SELECT payment_status FROM billing_payments WHERE id = ?",
             (payment_id,),
@@ -21036,6 +21055,11 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             ),
         )
         if is_duplicate_paid_payment:
+            connection.execute(
+                "UPDATE billing_payments SET provider_payment_id = COALESCE(NULLIF(?, ''), provider_payment_id), "
+                "raw_event_json = ?, updated_at = ? WHERE id = ?",
+                (provider_payment_id, raw_event_json, now_iso, payment_id),
+            )
             logger.info(
                 "PayFast duplicate paid notification ignored checkout=%s payment_id=%s email=%s",
                 checkout_id,
@@ -21146,6 +21170,15 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                     "UPDATE users SET trial_status = CASE WHEN trial_used_at IS NOT NULL AND trial_used_at <> '' THEN 'converted' ELSE trial_status END, updated_at = ? WHERE lower(email) = lower(?)",
                     (now_iso, email),
                 )
+        elif next_status in {"failed", "cancelled", "payment_failed", "declined"}:
+            failed_status = "cancelled" if next_status == "cancelled" else "payment_failed"
+            connection.execute(
+                "UPDATE billing_subscriptions SET status = ?, provider_status = ?, "
+                "provider_token = COALESCE(NULLIF(?, ''), provider_token), raw_event_json = ?, "
+                "last_reconciled_at = ?, updated_at = ? WHERE lower(email) = lower(?) AND provider = 'payfast'",
+                (failed_status, payment_status.lower() or failed_status, provider_token,
+                 raw_event_json, now_iso, now_iso, email),
+            )
     sync_user_account_snapshot(email)
     return next_status
 
@@ -21231,9 +21264,17 @@ def activate_payfast_trial_from_verified_subscription(
 
     now = utc_now()
     now_iso = now.isoformat()
-    trial_started = parse_billing_datetime(session["created_at"]) or now
     provider_run_date = parse_payfast_run_date(provider_state["run_date"])
-    trial_ends = provider_run_date if provider_run_date and provider_run_date > now else trial_started + timedelta(days=FREE_TRIAL_DAYS)
+    if provider_run_date and provider_run_date > now:
+        trial_ends = provider_run_date
+        trial_started = provider_run_date - timedelta(days=FREE_TRIAL_DAYS)
+        if trial_started > now:
+            trial_started = now
+    else:
+        # A local checkout timestamp is not provider approval. Without a
+        # future PayFast run date, start only when verification succeeds.
+        trial_started = now
+        trial_ends = now + timedelta(days=FREE_TRIAL_DAYS)
     trial_started_iso = trial_started.isoformat()
     trial_ends_iso = trial_ends.isoformat()
     safe_event = {
@@ -21259,6 +21300,17 @@ def activate_payfast_trial_from_verified_subscription(
     payment_id = "trial-" + compact_text(session["id"])
 
     with get_db_connection() as connection:
+        # A verified form ITN and a recurring JSON notification can arrive in
+        # either order for the same zero-rand trial authorization. Reuse the
+        # first persisted trial payment so the second callback enriches the
+        # existing record instead of creating a duplicate charge/history row.
+        existing_trial_payment = connection.execute(
+            "SELECT id FROM billing_payments WHERE checkout_session_id = ? "
+            "AND amount_zar = '0.00' ORDER BY created_at ASC LIMIT 1",
+            (compact_text(session["id"]),),
+        ).fetchone()
+        if existing_trial_payment:
+            payment_id = compact_text(existing_trial_payment["id"], payment_id)
         current_subscription = connection.execute(
             "SELECT provider_token, status, current_period_end FROM billing_subscriptions WHERE lower(email) = lower(?)",
             (email,),
@@ -21662,22 +21714,48 @@ def recover_pending_payfast_trial(
 def activate_library_storage_from_payfast(payload: dict[str, str], session: sqlite3.Row) -> str:
     package = get_library_storage_package(session["plan_id"])
     payment_status = compact_text(payload.get("payment_status")).upper()
-    if payment_status not in {"COMPLETE", "COMPLETE_PAYMENT"}:
-        return payment_status.lower() or "failed"
-    amount = format_zar_transaction_amount(payload.get("amount_gross"))
+    amount = format_zar_transaction_amount(compact_text(payload.get("amount_gross"), session["amount_zar"]))
     if amount != format_zar_transaction_amount(package["amount_zar"]):
         raise HTTPException(status_code=400, detail="PayFast amount does not match the storage package.")
     checkout_id = compact_text(session["id"])
     email = normalize_email(session["email"])
     now_iso = utc_now().isoformat()
     provider_payment_id = compact_text(payload.get("pf_payment_id"), checkout_id)
+    provider_token = compact_text(payload.get("token"))
     raw_event_json = json.dumps(payload, ensure_ascii=False)
+    if payment_status not in {"COMPLETE", "COMPLETE_PAYMENT"} or not provider_token:
+        next_status = (
+            "confirmation_pending"
+            if payment_status in {"COMPLETE", "COMPLETE_PAYMENT", "PENDING", "PROCESSING"}
+            else payment_status.lower() or "failed"
+        )
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE billing_checkout_sessions SET status = ?, provider_payment_id = ?, "
+                "provider_token = COALESCE(NULLIF(?, ''), provider_token), raw_event_json = ?, updated_at = ? WHERE id = ?",
+                (next_status, provider_payment_id, provider_token, raw_event_json, now_iso, checkout_id),
+            )
+            connection.execute(
+                "INSERT INTO billing_payments (id, email, checkout_session_id, plan_id, provider, provider_payment_id, "
+                "amount_zar, payment_status, raw_event_json, paid_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'payfast', ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET payment_status = excluded.payment_status, "
+                "raw_event_json = excluded.raw_event_json, updated_at = excluded.updated_at",
+                (provider_payment_id, email, checkout_id, package["id"], provider_payment_id,
+                 amount, next_status, raw_event_json, now_iso, now_iso, now_iso),
+            )
+            connection.execute(
+                "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) "
+                "VALUES (?, ?, ?, 'payfast', 'STORAGE_PAYMENT_' || ?, ?, ?)",
+                (uuid4().hex, email, checkout_id, next_status.upper(), raw_event_json, now_iso),
+            )
+        return next_status
     with get_db_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             "UPDATE billing_checkout_sessions SET status = 'active', provider_payment_id = ?, "
             "provider_token = COALESCE(NULLIF(?, ''), provider_token), raw_event_json = ?, updated_at = ? WHERE id = ?",
-            (provider_payment_id, compact_text(payload.get("token")), raw_event_json, now_iso, checkout_id),
+            (provider_payment_id, provider_token, raw_event_json, now_iso, checkout_id),
         )
         connection.execute(
             "UPDATE payment_requests SET status = 'verified', verified_at = ?, verified_by = 'payfast' "
@@ -26751,8 +26829,12 @@ def get_owned_billing_checkout_status(
     session = get_checkout_session(checkout_id)
     if not session or normalize_email(session["email"]) != normalized_email:
         raise HTTPException(status_code=404, detail="Checkout session not found.")
-    reconcile_payfast_trial_payment_history(normalized_email)
-    subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
+    is_storage_checkout = compact_text(session["plan_id"]).lower().startswith("storage_")
+    if is_storage_checkout:
+        subscription, entitlement = ({}, {})
+    else:
+        reconcile_payfast_trial_payment_history(normalized_email)
+        subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
     # Re-read because reconciliation or a concurrently received PayFast event
     # may have changed this checkout after the first ownership check.
     session = get_checkout_session(checkout_id)
@@ -26765,6 +26847,8 @@ def get_owned_billing_checkout_status(
         "status": status,
         "complete": complete,
         "updated_at": session["updated_at"],
+        "product_type": "storage_addon" if is_storage_checkout else "ai_subscription",
+        "storage": get_library_storage_summary(normalized_email) if is_storage_checkout and complete else None,
         "subscription": subscription,
         "entitlement": entitlement,
     }
@@ -27977,9 +28061,11 @@ def payfast_webhook_readiness():
 async def payfast_itn(request: Request):
     started_at = utc_now()
     content_type = compact_text(request.headers.get("content-type")).lower()
-    if "application/json" in content_type:
+    raw_body = await request.body()
+    body_starts_as_json = raw_body.lstrip().startswith(b"{")
+    if "application/json" in content_type or body_starts_as_json:
         try:
-            raw_payload = await request.json()
+            raw_payload = json.loads(raw_body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Invalid PayFast subscription notification.") from exc
         if not isinstance(raw_payload, dict):
@@ -28001,7 +28087,7 @@ async def payfast_itn(request: Request):
         )
         return Response(content="OK", media_type="text/plain")
     verify_payfast_source(request)
-    payload, expected_signature, validation_string = await parse_payfast_itn_payload(request)
+    payload, expected_signature, validation_string = await parse_payfast_itn_payload(request, raw_body)
     posted_signature = compact_text(payload.get("signature")).lower()
     if not posted_signature or not hmac.compare_digest(posted_signature, expected_signature.lower()):
         logger.warning("PayFast ITN signature mismatch checkout=%s payment_status=%s", compact_text(payload.get("m_payment_id")), compact_text(payload.get("payment_status")))
@@ -38418,6 +38504,29 @@ async def run_summary_job(
             owner_email,
             generation_prompt,
         )
+        guide_library_file = None
+        guide_library_status = "storage_not_configured"
+        if owner_email:
+            heading = re.search(r"(?m)^#{1,3}\s+(.+?)\s*$", summary)
+            requested_title = compact_text(generation_prompt.splitlines()[0] if generation_prompt else "")
+            guide_title = compact_text(heading.group(1) if heading else requested_title, "Study Guide")
+            guide_library_file, guide_library_status = await asyncio.to_thread(
+                save_generated_artifact_to_library,
+                email=owner_email,
+                filename=f"{sanitize_download_filename(guide_title)}.md",
+                content_type="text/markdown",
+                content=summary.encode("utf-8"),
+                source_type="generated_study_guide",
+                extracted_text=summary,
+            )
+            update_job(
+                job_id,
+                status="processing",
+                stage="Study guide saved; preparing learning tools",
+                progress=68,
+                library_file=guide_library_file,
+                library_save_status=guide_library_status,
+            )
         raise_if_job_cancelled(job_id)
         visual_analysis: list[dict[str, str]] = []
         if reference_images:
@@ -38462,6 +38571,8 @@ async def run_summary_job(
             quiz_questions=[],
             study_images=study_images,
             used_fallback=used_fallback,
+            library_file=guide_library_file,
+            library_save_status=guide_library_status,
         )
         job = jobs.get(job_id, {})
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
@@ -40422,35 +40533,42 @@ def get_active_library_storage_addon(email: str) -> dict[str, Any] | None:
     normalized_email = normalize_email(email)
     try:
         with get_db_connection() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 """
-                SELECT plan_id, amount_zar, provider_payment_id, paid_at, created_at
+                SELECT *
                 FROM billing_payments
-                WHERE lower(email) = ? AND upper(payment_status) IN ('PAID', 'COMPLETE', 'COMPLETE_PAYMENT', 'ACTIVE')
-                  AND lower(plan_id) LIKE 'storage_%'
-                ORDER BY COALESCE(NULLIF(paid_at, ''), created_at) DESC
-                LIMIT 1
+                WHERE lower(email) = lower(?)
+                ORDER BY created_at DESC
+                LIMIT 100
                 """,
                 (normalized_email,),
-            ).fetchone()
+            ).fetchall()
     except Exception as exc:
         # Add-on capacity is optional. A rolling database migration must not
         # take the user's base Library catalog or upload allowance offline.
-        logger.warning("Library storage add-on lookup unavailable email=%s error=%s", normalized_email, type(exc).__name__)
+        logger.warning(
+            "Library storage add-on lookup unavailable email=%s error=%s detail=%s",
+            normalized_email, type(exc).__name__, compact_text(exc)[:160],
+        )
         return None
+    row = next((candidate for candidate in rows if (
+        compact_text(row_value(candidate, "plan_id")).lower().startswith("storage_")
+        and compact_text(row_value(candidate, "payment_status")).upper()
+        in {"PAID", "COMPLETE", "COMPLETE_PAYMENT", "ACTIVE"}
+    )), None)
     if not row:
         return None
-    activated_at = parse_billing_datetime(row["paid_at"] or row["created_at"])
+    activated_at = parse_billing_datetime(row_value(row, "paid_at") or row_value(row, "created_at"))
     if not activated_at:
         return None
     expires_at = activated_at + timedelta(days=30)
     if expires_at <= utc_now():
         return None
-    package = dict(get_library_storage_package(row["plan_id"]))
+    package = dict(get_library_storage_package(row_value(row, "plan_id")))
     package.update({
         "activated_at": activated_at.isoformat(),
         "expires_at": expires_at.isoformat(),
-        "payment_reference": compact_text(row["provider_payment_id"]),
+        "payment_reference": compact_text(row_value(row, "provider_payment_id")),
     })
     return package
 
@@ -40639,6 +40757,13 @@ def commit_library_file(
         raise awaitable_error
     if isinstance(awaitable_error, LibraryStorageError):
         provider_status = getattr(awaitable_error, "status_code", None)
+        provider_message = compact_text(getattr(awaitable_error, "provider_message", ""))[:160]
+        logger.warning(
+            "Library object upload rejected status=%s reason=%s bucket=%s project_host=%s",
+            provider_status or 0, provider_message or type(awaitable_error).__name__,
+            library_object_storage.config.bucket,
+            library_object_storage.config.base_url.split("://", 1)[-1].split("/", 1)[0],
+        )
         if provider_status == 404:
             message = "The private Library storage bucket was not found. An administrator must configure the approved Supabase bucket."
         elif provider_status in {401, 403}:
@@ -40974,8 +41099,58 @@ async def extract_slide_text(
     is_study_chat_attachment = compact_text(request.headers.get("x-mabaso-upload-purpose")).lower() == "study-chat"
     quota_feature = "study_chat_upload" if is_study_chat_attachment else "source_upload"
     usage: dict[str, Any] | None = None
+    library_file: dict[str, Any] | None = None
+    auto_save_upload = (
+        not is_study_chat_attachment
+        or get_library_settings_for_user(current_user)["auto_save_chat_uploads"]
+    )
+    library_save_status = "disabled_by_user" if not auto_save_upload else "storage_not_configured"
+
+    async def persist_received_source_to_library(content: bytes) -> None:
+        """Commit accepted source bytes before any expensive extraction begins."""
+        nonlocal library_file, library_save_status
+        if not auto_save_upload:
+            return
+        if not library_object_storage.configured:
+            library_save_status = "storage_not_configured"
+            return
+        if len(content) > MAX_LIBRARY_FILE_BYTES:
+            library_save_status = "file_too_large"
+            return
+        try:
+            checksum = hashlib.sha256(content).hexdigest()
+            reservation = await asyncio.to_thread(
+                reserve_library_storage, current_user, len(content), checksum,
+            )
+            if reservation.get("existing"):
+                library_file = reservation["existing"]
+                library_save_status = "already_saved"
+                return
+            library_file = await asyncio.to_thread(
+                commit_library_file,
+                email=current_user,
+                reservation_id=reservation["reservation_id"],
+                filename=file.filename,
+                content_type=content_type,
+                content=content,
+                checksum=checksum,
+                source_type="study_chat_upload" if is_study_chat_attachment else "study_source_upload",
+                extracted_text="",
+            )
+            library_save_status = "saved"
+            record_audit_log(
+                action="library.file.auto_saved", email=current_user, request=request,
+                resource_type="library_file", resource_name=library_file["id"],
+                metadata={"source_kind": "received_upload", "size_bytes": len(content), "before_extraction": True},
+            )
+        except HTTPException as library_error:
+            library_save_status = "storage_full" if library_error.status_code == 409 else "storage_unavailable"
+        except Exception:
+            library_save_status = "storage_unavailable"
+            logger.warning("Accepted source bytes could not be saved to Library before extraction", exc_info=True)
 
     async def finish_extracted_source(text: str, image_urls: list[str], *, source_kind: str) -> dict[str, Any]:
+        nonlocal library_file
         if not usage:
             raise HTTPException(status_code=500, detail="The upload allowance reservation was not created.")
         update_usage_event_metadata(
@@ -41006,44 +41181,17 @@ async def extract_slide_text(
                 image_url=next((item for item in image_urls if compact_text(item)), ""),
                 source_kind=source_kind,
             )
-        library_file = None
-        auto_save_upload = (
-            not is_study_chat_attachment
-            or get_library_settings_for_user(current_user)["auto_save_chat_uploads"]
-        )
-        library_save_status = "disabled_by_user" if not auto_save_upload else "storage_not_configured"
-        if auto_save_upload and library_object_storage.configured and len(file_bytes) <= MAX_LIBRARY_FILE_BYTES:
+        if library_file and text:
             try:
-                checksum = hashlib.sha256(file_bytes).hexdigest()
-                reservation = await asyncio.to_thread(
-                    reserve_library_storage, current_user, len(file_bytes), checksum,
-                )
-                if reservation.get("existing"):
-                    library_file = reservation["existing"]
-                    library_save_status = "already_saved"
-                else:
-                    library_file = await asyncio.to_thread(
-                        commit_library_file,
-                        email=current_user,
-                        reservation_id=reservation["reservation_id"],
-                        filename=file.filename,
-                        content_type=content_type,
-                        content=file_bytes,
-                        checksum=checksum,
-                        source_type="study_chat_upload" if is_study_chat_attachment else "study_source_upload",
-                        extracted_text=text,
+                with get_db_connection() as connection:
+                    connection.execute(
+                        "UPDATE library_files SET extracted_text = ?, status = 'ready', updated_at = ? "
+                        "WHERE id = ? AND lower(owner_email) = lower(?) AND deleted_at = ''",
+                        (text[:MAX_STORAGE_TRANSCRIPT_CHARS], utc_now().isoformat(), library_file["id"], current_user),
                     )
-                    library_save_status = "saved"
-                    record_audit_log(
-                        action="library.file.auto_saved", email=current_user, request=request,
-                        resource_type="library_file", resource_name=library_file["id"],
-                        metadata={"source_kind": source_kind, "size_bytes": len(file_bytes)},
-                    )
-            except HTTPException as library_error:
-                library_save_status = "storage_full" if library_error.status_code == 409 else "storage_unavailable"
+                library_file = serialize_library_file(get_owned_library_file(current_user, library_file["id"]))
             except Exception:
-                library_save_status = "storage_unavailable"
-                logger.warning("Accepted study source could not be auto-saved to Library", exc_info=True)
+                logger.warning("Saved Library source text index could not be updated", exc_info=True)
         return {"text": text, "image_urls": image_urls, "usage": usage, "upload_receipt": upload_receipt, "library_file": library_file, "library_save_status": library_save_status}
 
     try:
@@ -41081,6 +41229,22 @@ async def extract_slide_text(
                     f"Please keep it below {size_limit / (1024 * 1024):.0f} MB."
                 ),
             )
+
+        # Run only the minimal synchronous safety checks required before the
+        # private original is retained. OCR, parsing, transcription, model
+        # calls, and embeddings still happen only after this commit.
+        if any((
+            is_pptx_upload(file.filename, content_type),
+            is_docx_upload(file.filename, content_type),
+            is_xlsx_upload(file.filename, content_type),
+            is_open_document_upload(file.filename, content_type),
+        )):
+            ensure_safe_zip_upload(file_bytes, file.filename)
+        elif content_type.startswith("image/"):
+            ensure_allowed_image_upload(file.filename, content_type)
+        elif is_pdf_upload(file.filename, content_type) and not file_bytes.lstrip().startswith(b"%PDF"):
+            raise HTTPException(status_code=400, detail="That PDF does not have a valid PDF file signature.")
+        await persist_received_source_to_library(file_bytes)
 
         if is_text_upload(file.filename, content_type):
             text = normalize_text_document_content(file_bytes, file.filename)

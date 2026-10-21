@@ -35,6 +35,31 @@ class LibraryStorageProviderTests(unittest.TestCase):
         self.assertEqual(config.base_url, "https://project.supabase.co")
         self.assertEqual(config.service_key, "sb_secret_backend_only")
 
+    def test_new_supabase_secret_key_is_not_sent_as_a_bearer_jwt(self):
+        storage = SupabaseLibraryStorage(LibraryStorageConfig(
+            base_url="https://project.supabase.co",
+            service_key="sb_secret_backend_only",
+            bucket="mabaso-library",
+            timeout_seconds=5,
+            auto_create_bucket=False,
+            bucket_file_size_limit=50 * 1024 * 1024,
+        ))
+        headers = storage._headers()
+        self.assertEqual(headers["apikey"], "sb_secret_backend_only")
+        self.assertNotIn("Authorization", headers)
+
+    def test_legacy_service_role_jwt_remains_a_bearer_token(self):
+        storage = SupabaseLibraryStorage(LibraryStorageConfig(
+            base_url="https://project.supabase.co",
+            service_key="eyJlegacy-service-role",
+            bucket="mabaso-library",
+            timeout_seconds=5,
+            auto_create_bucket=False,
+            bucket_file_size_limit=50 * 1024 * 1024,
+        ))
+        headers = storage._headers()
+        self.assertEqual(headers["Authorization"], "Bearer eyJlegacy-service-role")
+
     def test_missing_bucket_is_created_private_then_upload_is_retried(self):
         config = LibraryStorageConfig(
             base_url="https://project.supabase.co",
@@ -337,6 +362,29 @@ class PodcastLibraryPersistenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(completed[0].kwargs["library_file"]["id"], "library-podcast")
             self.assertEqual(completed[0].kwargs["library_save_status"], "saved")
             main.jobs.pop("podcast-library-test", None)
+
+
+class StudyGuideLibraryPersistenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generated_study_guide_is_saved_before_remaining_tools_finish(self):
+        job_id = main.create_job("study_guide", "student@example.test")
+        with (
+            patch.object(main, "generate_study_guide", new=AsyncMock(return_value=("# Control Systems\n\nA useful guide.", False))),
+            patch.object(main, "save_generated_artifact_to_library", return_value=({"id": "library-guide"}, "saved")) as save,
+            patch.object(main, "generate_study_formula_asset", new=AsyncMock(return_value={})),
+            patch.object(main, "resolve_study_guide_visuals", new=AsyncMock(return_value=[])),
+            patch.object(main, "record_audit_log"),
+        ):
+            await main.run_summary_job(
+                job_id, "", "Notes", "", "", "English", [],
+                "student@example.test", "Control Systems",
+            )
+
+        save.assert_called_once()
+        self.assertEqual(save.call_args.kwargs["source_type"], "generated_study_guide")
+        self.assertEqual(save.call_args.kwargs["content_type"], "text/markdown")
+        self.assertEqual(main.jobs[job_id]["library_file"]["id"], "library-guide")
+        self.assertEqual(main.jobs[job_id]["library_save_status"], "saved")
+        main.jobs.pop(job_id, None)
 
 
 if __name__ == "__main__":

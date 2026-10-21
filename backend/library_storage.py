@@ -85,10 +85,17 @@ class SupabaseLibraryStorage:
         return f"{self.config.base_url}/storage/v1/object/{safe_bucket}/{safe_key}"
 
     def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.config.service_key}",
+        headers = {
             "apikey": self.config.service_key,
+            "User-Agent": "MabasoAI-Backend/1.0",
         }
+        # Supabase's newer sb_secret_* keys are opaque API keys, not JWTs.
+        # Sending one as a Bearer token makes the gateway try to parse it as a
+        # JWT and can reject otherwise valid Storage requests. Legacy
+        # service_role JWTs still belong in both headers for compatibility.
+        if not self.config.service_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {self.config.service_key}"
+        return headers
 
     def ensure_private_bucket(self) -> None:
         """Create only the configured private bucket when explicitly enabled."""
